@@ -1,4 +1,10 @@
-from .prompts import FINANCIAL_RAG_SYSTEM_PROMPT, FINANCIAL_SUMMARY_PROMPT
+from .prompts import STRICT_RAG_SYSTEM_PROMPT, NO_INFORMATION_FALLBACK_RESPONSE
+from .rag_service import RAGService
 from .pipeline import RAGPipeline
 
-__all__ = ["FINANCIAL_RAG_SYSTEM_PROMPT", "FINANCIAL_SUMMARY_PROMPT", "RAGPipeline"]
+__all__ = [
+    "STRICT_RAG_SYSTEM_PROMPT",
+    "NO_INFORMATION_FALLBACK_RESPONSE",
+    "RAGService",
+    "RAGPipeline",
+]

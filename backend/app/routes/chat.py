@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..api.deps import get_current_user
 from ..services.chat_service import ChatService
 from ..schemas.chat_schema import (
+    ChatRequest,
+    ChatResponse,
     ChatQueryRequest,
     ChatQueryResponse,
     ChatMessageItem,
@@ -10,31 +12,57 @@ from ..schemas.chat_schema import (
 )
 from ..schemas.common_schema import ApiResponse
 
-router = APIRouter(prefix="/chat", tags=["Chat & RAG Q&A"])
+router = APIRouter(prefix="", tags=["Chat & RAG Q&A"])
 chat_service = ChatService()
 
 
-@router.post("/query", response_model=ApiResponse[ChatQueryResponse])
+@router.post("/chat", response_model=ChatResponse)
+async def chat_rag(
+    request: ChatRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    POST /api/chat
+    Request: document_id, question, conversation_history
+    Response: answer, sources, pages, sections, retrieved_chunks
+    """
+    user_id = current_user["uid"]
+    doc_id = request.target_document_id
+
+    response = chat_service.process_query(
+        document_id=doc_id,
+        question=request.question,
+        user_id=user_id,
+        conversation_history=request.conversation_history,
+        top_k=request.top_k or 4,
+    )
+    return response
+
+
+@router.post("/chat/query", response_model=ApiResponse[ChatQueryResponse])
 async def query_report(
     request: ChatQueryRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Executes a grounded RAG query against the specified financial report."""
+    """Executes a grounded RAG query wrapped in standard ApiResponse envelope."""
     user_id = current_user["uid"]
+    doc_id = request.target_document_id
+
     response = chat_service.process_query(
-        report_id=request.report_id,
+        document_id=doc_id,
         question=request.question,
         user_id=user_id,
+        conversation_history=request.conversation_history,
         top_k=request.top_k or 4,
     )
     return ApiResponse(
         success=True,
-        message="Answer generated with source page citations.",
+        message="Answer generated with Groq LLM grounded vector citations.",
         data=response,
     )
 
 
-@router.get("/{report_id}/history", response_model=ApiResponse[ChatHistoryResponse])
+@router.get("/chat/{report_id}/history", response_model=ApiResponse[ChatHistoryResponse])
 async def get_chat_history(
     report_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -48,7 +76,7 @@ async def get_chat_history(
     )
 
 
-@router.delete("/{report_id}/history", response_model=ApiResponse[Dict[str, Any]])
+@router.delete("/chat/{report_id}/history", response_model=ApiResponse[Dict[str, Any]])
 async def clear_chat_history(
     report_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),

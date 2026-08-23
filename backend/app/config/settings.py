@@ -19,10 +19,13 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     
     # LLM Settings
-    LLM_PROVIDER: str = "gemini"
+    LLM_PROVIDER: str = "groq"
+    GROQ_API_KEY: str = ""
+    GROQ_PRIMARY_MODEL: str = "groq/compound"
+    GROQ_FALLBACK_MODELS: str = "groq/compound,openai/gpt-oss-120b,qwen/qwen3.6-27b,groq/compound-mini,llama-3.3-70b-versatile,llama-3.1-8b-instant,llama-3.1-405b-reasoning"
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
-    DEFAULT_LLM_MODEL: str = "gemini-1.5-flash"
+    DEFAULT_LLM_MODEL: str = "groq/compound"
     
     # ChromaDB & Vector Store
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_data"
@@ -41,6 +44,18 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def groq_model_candidates(self) -> List[str]:
+        models = [m.strip() for m in self.GROQ_FALLBACK_MODELS.split(",") if m.strip()]
+        # Remove duplicates while preserving order
+        seen = set()
+        result = []
+        for m in models:
+            if m not in seen:
+                seen.add(m)
+                result.append(m)
+        return result
 
     model_config = SettingsConfigDict(
         env_file=".env",

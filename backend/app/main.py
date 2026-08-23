@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from .config import get_settings
 from .routes.api_router import api_router
 from .routes.documents import router as documents_router
+from .routes.chat import router as chat_router
 from .firebase.admin_client import get_firebase_app
 from .utils.logger import setup_logger
 
@@ -68,8 +69,9 @@ def create_app() -> FastAPI:
 
     # Mount API routes
     app.include_router(api_router)
-    # Also mount documents router directly under /api for /api/documents/upload
+    # Also mount direct /api routes for /api/documents and /api/chat
     app.include_router(documents_router, prefix="/api")
+    app.include_router(chat_router, prefix="/api")
 
     # Static files for local uploads
     upload_dir = os.path.join(os.getcwd(), "uploads")
