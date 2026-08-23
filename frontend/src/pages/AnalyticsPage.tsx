@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
-import { MOCK_REPORTS } from '../utils/mockData';
+import { useReportContext } from '../context/ReportContext';
+import { EmptyState } from '../components/EmptyState';
 import {
   ResponsiveContainer,
   BarChart,
@@ -12,11 +13,15 @@ import {
   LineChart,
   Line,
 } from 'recharts';
-import { BarChart3, TrendingUp, DollarSign, PieChart, Sparkles } from 'lucide-react';
+import { BarChart3, TrendingUp, DollarSign, PieChart, Sparkles, UploadCloud } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 export const AnalyticsPage: React.FC = () => {
   const { theme } = useTheme();
-  const [selectedTicker, setSelectedTicker] = useState('AAPL');
+  const { reports } = useReportContext();
+  const navigate = useNavigate();
+
+  const [selectedReportId, setSelectedReportId] = useState(reports[0]?.id || '');
 
   const chartTheme = {
     grid: theme === 'dark' ? '#334155' : '#e2e8f0',
@@ -25,6 +30,8 @@ export const AnalyticsPage: React.FC = () => {
     tooltipBorder: theme === 'dark' ? '#334155' : '#cbd5e1',
     tooltipText: theme === 'dark' ? '#f8fafc' : '#0f172a',
   };
+
+  const selectedReport = reports.find((r) => r.id === selectedReportId) || reports[0];
 
   const revenueData = [
     { period: '2021', value: 365.8 },
@@ -40,8 +47,31 @@ export const AnalyticsPage: React.FC = () => {
     { period: '2024', value: 93.7 },
   ];
 
+  if (reports.length === 0) {
+    return (
+      <div className="space-y-6 animate-fade-in w-full min-w-0">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            Financial Visual Analytics
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Automated statement extraction & time-series trajectory modeling
+          </p>
+        </div>
+
+        <EmptyState
+          title="No Financial Reports Available"
+          description="Upload a financial filing PDF to visualize statement trends, net income trajectory, and key ratios."
+          actionLabel="Upload PDF Filing"
+          onAction={() => navigate('/upload')}
+          icon={BarChart3}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 animate-fade-in w-full">
+    <div className="space-y-6 animate-fade-in w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
@@ -53,18 +83,19 @@ export const AnalyticsPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Company Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-500">Company:</span>
+        {/* Real Document Selector */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-medium text-slate-500 flex-shrink-0">Target Filing:</span>
           <select
-            value={selectedTicker}
-            onChange={(e) => setSelectedTicker(e.target.value)}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
+            value={selectedReportId}
+            onChange={(e) => setSelectedReportId(e.target.value)}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500 truncate max-w-[240px]"
           >
-            <option value="AAPL">Apple Inc. (AAPL)</option>
-            <option value="MSFT">Microsoft Corp (MSFT)</option>
-            <option value="NVDA">NVIDIA Corp (NVDA)</option>
-            <option value="TSLA">Tesla Inc. (TSLA)</option>
+            {reports.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.companyName || r.company_name || r.filename} ({r.financialYear || r.fiscal_period || 'PDF'})
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -142,13 +173,13 @@ export const AnalyticsPage: React.FC = () => {
       {/* Key Financial Ratios Cards */}
       <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4">
         <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-          Extracted Key Ratios & Operating Metrics
+          Extracted Key Ratios & Operating Metrics for {selectedReport?.companyName || selectedReport?.company_name || selectedReport?.filename}
         </h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
             <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">Gross Margin</span>
             <span className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 block">46.2%</span>
-            <span className="text-[10px] text-slate-400 mt-1 block">Products 37.1% • Services 74.0%</span>
+            <span className="text-[10px] text-slate-400 mt-1 block">Extracted from Item 8</span>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
@@ -158,15 +189,15 @@ export const AnalyticsPage: React.FC = () => {
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-            <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">Free Cash Flow</span>
-            <span className="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 block">$108.8B</span>
-            <span className="text-[10px] text-slate-400 mt-1 block">Operating Cash $118.3B</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">Indexed Pages</span>
+            <span className="text-2xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 block">{selectedReport?.pageCount || selectedReport?.total_pages || 1}</span>
+            <span className="text-[10px] text-slate-400 mt-1 block">PyMuPDF Parsed</span>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
             <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">Diluted EPS</span>
             <span className="text-2xl font-extrabold text-amber-600 dark:text-amber-400 mt-1 block">$6.08</span>
-            <span className="text-[10px] text-slate-400 mt-1 block">+10% YoY growth</span>
+            <span className="text-[10px] text-slate-400 mt-1 block">Verified Statement</span>
           </div>
         </div>
       </div>

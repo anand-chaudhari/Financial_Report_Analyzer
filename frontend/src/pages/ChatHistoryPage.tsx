@@ -1,14 +1,26 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MOCK_CONVERSATIONS, MockConversation } from '../utils/mockData';
+import { useReportContext } from '../context/ReportContext';
+import { EmptyState } from '../components/EmptyState';
 import { MessageSquare, Search, BookOpen, Trash2, ArrowRight, Bot } from 'lucide-react';
+
+interface HistoryItem {
+  id: string;
+  reportName: string;
+  ticker: string;
+  question: string;
+  answer: string;
+  timestamp: string;
+  page_number: number;
+}
 
 export const ChatHistoryPage: React.FC = () => {
   const navigate = useNavigate();
-  const [conversations, setConversations] = useState<MockConversation[]>(MOCK_CONVERSATIONS);
+  const { reports } = useReportContext();
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [search, setSearch] = useState('');
 
-  const filtered = conversations.filter(
+  const filtered = historyItems.filter(
     (c) =>
       c.question.toLowerCase().includes(search.toLowerCase()) ||
       c.answer.toLowerCase().includes(search.toLowerCase()) ||
@@ -17,11 +29,11 @@ export const ChatHistoryPage: React.FC = () => {
   );
 
   const handleDelete = (id: string) => {
-    setConversations((prev) => prev.filter((c) => c.id !== id));
+    setHistoryItems((prev) => prev.filter((c) => c.id !== id));
   };
 
   return (
-    <div className="space-y-6 animate-fade-in w-full">
+    <div className="space-y-6 animate-fade-in w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
@@ -49,9 +61,13 @@ export const ChatHistoryPage: React.FC = () => {
       {/* Conversations list */}
       <div className="space-y-4">
         {filtered.length === 0 ? (
-          <div className="p-12 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-slate-500 text-xs">
-            No queries match your search.
-          </div>
+          <EmptyState
+            title="No AI Query History"
+            description="You haven't asked any questions yet. Select a financial report in the AI Analyst workspace to start asking questions."
+            actionLabel="Go to AI Analyst"
+            onAction={() => navigate('/analyst')}
+            icon={MessageSquare}
+          />
         ) : (
           filtered.map((conv) => (
             <div
@@ -78,13 +94,6 @@ export const ChatHistoryPage: React.FC = () => {
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={() => navigate(`/reports/${conv.reportId}`)}
-                    className="flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-xs font-bold hover:bg-emerald-500/20 transition-colors cursor-pointer"
-                  >
-                    <span>Open Report</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
                 </div>
               </div>
 
@@ -97,22 +106,15 @@ export const ChatHistoryPage: React.FC = () => {
                 </p>
               </div>
 
-              {conv.citations && conv.citations.length > 0 && (
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase text-slate-400">
-                    Verified Citations:
-                  </span>
-                  {conv.citations.map((c, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-slate-50 dark:bg-slate-950 text-emerald-700 dark:text-emerald-400 text-[10px] font-semibold border border-slate-200 dark:border-slate-800"
-                    >
-                      <BookOpen className="w-3 h-3" />
-                      Page {c.page_number} ({c.section || 'Statement'})
-                    </span>
-                  ))}
-                </div>
-              )}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-bold uppercase text-slate-400">
+                  Verified Citation:
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-slate-50 dark:bg-slate-950 text-emerald-700 dark:text-emerald-400 text-[10px] font-semibold border border-slate-200 dark:border-slate-800">
+                  <BookOpen className="w-3 h-3" />
+                  Page {conv.page_number}
+                </span>
+              </div>
             </div>
           ))
         )}

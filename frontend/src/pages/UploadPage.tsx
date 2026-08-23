@@ -2,36 +2,49 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UploadCloud, FileText, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
 import { formatBytes } from '../utils/formatters';
+import { useReportContext } from '../context/ReportContext';
+import { ReportItem } from '../types/report';
 
 export const UploadPage: React.FC = () => {
   const navigate = useNavigate();
+  const { uploadReport } = useReportContext();
+
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [uploadedResult, setUploadedResult] = useState<ReportItem | null>(null);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragActive(false);
+    setErrorMessage(null);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         setSelectedFile(file);
+      } else {
+        setErrorMessage('Only PDF documents (.pdf) are supported.');
       }
     }
   };
 
-  const handleStartProcess = () => {
+  const handleStartProcess = async () => {
     if (!selectedFile) return;
     setUploading(true);
+    setErrorMessage(null);
 
-    setTimeout(() => {
+    try {
+      const result = await uploadReport(selectedFile);
+      setUploadedResult(result);
       setUploading(false);
-      setUploadSuccess(true);
       setTimeout(() => {
         navigate('/reports');
-      }, 1500);
-    }, 1800);
+      }, 2000);
+    } catch (err: any) {
+      setUploading(false);
+      setErrorMessage(err?.message || 'Failed to upload and process PDF file. Please try again.');
+    }
   };
 
   return (
@@ -53,6 +66,13 @@ export const UploadPage: React.FC = () => {
         </div>
       </div>
 
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -70,16 +90,38 @@ export const UploadPage: React.FC = () => {
           <div className="py-10 space-y-4">
             <div className="w-12 h-12 border-3 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Processing & Chunking Filing...
+              Processing & Chunking PDF Filing...
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Extracting tables, structuring footnotes, and generating vector embeddings.
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              Extracting text page-by-page, identifying sections, and generating vector embeddings in ChromaDB.
             </p>
           </div>
-        ) : uploadSuccess ? (
-          <div className="py-10 space-y-3 text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="w-12 h-12 mx-auto" />
-            <h3 className="text-base font-bold">Report Indexed Successfully!</h3>
+        ) : uploadedResult ? (
+          <div className="py-8 space-y-4 text-emerald-600 dark:text-emerald-400 max-w-md mx-auto">
+            <CheckCircle2 className="w-14 h-14 mx-auto" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+              Report Uploaded & Indexed Successfully!
+            </h3>
+
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-xs space-y-2 text-left">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Document ID:</span>
+                <span className="font-mono font-bold">{uploadedResult.id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Company:</span>
+                <span className="font-bold">{uploadedResult.companyName || uploadedResult.company_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Fiscal Period:</span>
+                <span className="font-bold">{uploadedResult.financialYear || uploadedResult.fiscal_period}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total Pages:</span>
+                <span className="font-bold">{uploadedResult.pageCount || uploadedResult.total_pages} pages</span>
+              </div>
+            </div>
+
             <p className="text-xs text-slate-500">Redirecting to your reports library...</p>
           </div>
         ) : (
@@ -93,7 +135,7 @@ export const UploadPage: React.FC = () => {
                 Drag and drop your PDF report here
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Supports PDF up to 50MB with complete table extraction
+                Supports PDF up to 25MB with page-by-page extraction
               </p>
             </div>
 
@@ -117,7 +159,7 @@ export const UploadPage: React.FC = () => {
 
             <div className="pt-2 flex items-center justify-center gap-3">
               <label className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs rounded-xl cursor-pointer transition-colors">
-                <span>Select File</span>
+                <span>Browse Files</span>
                 <input
                   type="file"
                   accept="application/pdf"

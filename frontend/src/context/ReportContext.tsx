@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { ReportItem } from '../types';
-import { reportService } from '../services/reportService';
+import { ReportItem } from '../types/report';
+import { documentService } from '../services/documentService';
 
 interface ReportContextType {
   reports: ReportItem[];
@@ -8,6 +8,7 @@ interface ReportContextType {
   loading: boolean;
   error: string | null;
   fetchReports: () => Promise<void>;
+  uploadReport: (file: File) => Promise<ReportItem>;
   setActiveReport: (report: ReportItem | null) => void;
   deleteReport: (reportId: string) => Promise<void>;
 }
@@ -24,22 +25,41 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setLoading(true);
     setError(null);
     try {
-      const response = await reportService.listReports();
-      if (response.success && response.data) {
-        setReports(response.data);
+      const liveDocs = await documentService.getDocuments();
+      setReports(liveDocs);
+      if (liveDocs.length > 0 && !activeReport) {
+        setActiveReport(liveDocs[0]);
       }
     } catch (err: any) {
+      console.warn('Error loading reports context:', err);
       setError(err?.message || 'Failed to fetch reports');
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const uploadReport = async (file: File): Promise<ReportItem> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const newReport = await documentService.uploadDocument(file);
+      setReports((prev) => [newReport, ...prev.filter((r) => r.id !== newReport.id)]);
+      setActiveReport(newReport);
+      return newReport;
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || 'Failed to upload PDF report';
+      setError(msg);
+      throw new Error(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const deleteReport = async (reportId: string) => {
     try {
-      await reportService.deleteReport(reportId);
-      setReports((prev) => prev.filter((r) => r.id !== reportId));
-      if (activeReport?.id === reportId) {
+      await documentService.deleteDocument(reportId);
+      setReports((prev) => prev.filter((r) => r.id !== reportId && r.documentId !== reportId));
+      if (activeReport?.id === reportId || activeReport?.documentId === reportId) {
         setActiveReport(null);
       }
     } catch (err: any) {
@@ -59,6 +79,7 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         loading,
         error,
         fetchReports,
+        uploadReport,
         setActiveReport,
         deleteReport,
       }}

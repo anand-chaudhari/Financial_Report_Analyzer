@@ -7,8 +7,10 @@ export interface StatCardProps {
   change?: string;
   changeType?: 'positive' | 'negative' | 'neutral';
   description?: string;
+  subtitle?: string;
   icon: LucideIcon;
-  iconColor?: 'emerald' | 'cyan' | 'indigo' | 'amber' | 'rose';
+  color?: 'emerald' | 'cyan' | 'indigo' | 'amber' | 'rose' | 'blue' | 'violet';
+  iconColor?: 'emerald' | 'cyan' | 'indigo' | 'amber' | 'rose' | 'blue' | 'violet';
 }
 
 export const StatCard: React.FC<StatCardProps> = ({
@@ -17,14 +19,23 @@ export const StatCard: React.FC<StatCardProps> = ({
   change,
   changeType = 'positive',
   description,
+  subtitle,
   icon: Icon,
-  iconColor = 'emerald',
+  color,
+  iconColor,
 }) => {
+  const chosenColor = color || iconColor || 'emerald';
+
   const colorMap = {
     emerald: {
       bg: 'bg-emerald-500/10 dark:bg-emerald-500/15',
       text: 'text-emerald-600 dark:text-emerald-400',
       border: 'border-emerald-500/20 dark:border-emerald-500/30',
+    },
+    blue: {
+      bg: 'bg-blue-500/10 dark:bg-blue-500/15',
+      text: 'text-blue-600 dark:text-blue-400',
+      border: 'border-blue-500/20 dark:border-blue-500/30',
     },
     cyan: {
       bg: 'bg-cyan-500/10 dark:bg-cyan-500/15',
@@ -35,6 +46,11 @@ export const StatCard: React.FC<StatCardProps> = ({
       bg: 'bg-indigo-500/10 dark:bg-indigo-500/15',
       text: 'text-indigo-600 dark:text-indigo-400',
       border: 'border-indigo-500/20 dark:border-indigo-500/30',
+    },
+    violet: {
+      bg: 'bg-violet-500/10 dark:bg-violet-500/15',
+      text: 'text-violet-600 dark:text-violet-400',
+      border: 'border-violet-500/20 dark:border-violet-500/30',
     },
     amber: {
       bg: 'bg-amber-500/10 dark:bg-amber-500/15',
@@ -48,12 +64,13 @@ export const StatCard: React.FC<StatCardProps> = ({
     },
   };
 
-  const selectedColor = colorMap[iconColor] || colorMap.emerald;
+  const selectedColor = colorMap[chosenColor] || colorMap.emerald;
+  const subText = subtitle || description;
 
   return (
-    <div className="relative p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-200 flex flex-col justify-between group">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 tracking-wide uppercase">
+    <div className="relative p-5 sm:p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-200 flex flex-col justify-between group min-w-0">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 tracking-wider uppercase truncate">
           {title}
         </span>
         <div
@@ -63,14 +80,14 @@ export const StatCard: React.FC<StatCardProps> = ({
         </div>
       </div>
 
-      <div className="mt-4 space-y-1">
-        <div className="flex items-baseline gap-2.5">
-          <span className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+      <div className="mt-3 space-y-1 min-w-0">
+        <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
+          <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight truncate">
             {value}
           </span>
           {change && (
             <span
-              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md ${
+              className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md flex-shrink-0 ${
                 changeType === 'positive'
                   ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
                   : changeType === 'negative'
@@ -86,9 +103,9 @@ export const StatCard: React.FC<StatCardProps> = ({
           )}
         </div>
 
-        {description && (
-          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-            {description}
+        {subText && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium truncate">
+            {subText}
           </p>
         )}
       </div>
