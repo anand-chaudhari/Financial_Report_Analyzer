@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+import concurrent.futures
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 try:
@@ -20,6 +21,17 @@ logger = setup_logger(__name__)
 
 # In-memory storage fallback for local development
 _in_memory_documents: Dict[str, DocumentModel] = {}
+
+
+def _run_with_timeout(func, timeout_sec: float = 3.0):
+    """Executes a function in a worker thread with a strict timeout to prevent Firestore gRPC blocking."""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func)
+            return future.result(timeout=timeout_sec)
+    except Exception as e:
+        logger.warning(f"Firestore query timed out ({timeout_sec}s) or failed: {str(e)}. Falling back to local storage.")
+        return None
 
 
 class DocumentService:
@@ -135,7 +147,6 @@ class DocumentService:
 
         doc_model = self.get_document(document_id, user_id)
         if not doc_model:
-            # Fallback search across all documents
             for doc in _in_memory_documents.values():
                 if doc.documentId == document_id:
                     doc_model = doc
@@ -190,55 +201,58 @@ class DocumentService:
         return False
 
     def get_document(self, document_id: str, user_id: str) -> Optional[DocumentModel]:
-        """Retrieves a document record for the authenticated user."""
+        """Retrieves a document record for the authenticated user with a 3s timeout fallback."""
         if self.firestore_db:
-            try:
+            def _fetch():
                 doc = self.firestore_db.collection("documents").document(document_id).get()
                 if doc.exists:
                     data = doc.to_dict()
                     if data.get("userId") == user_id or not user_id:
                         return DocumentModel.from_dict(data)
-            except Exception as e:
-                logger.error(f"Firestore get_document error: {str(e)}")
+                return None
+
+            result = _run_with_timeout(_fetch, timeout_sec=2.5)
+            if result:
+                return result
 
         doc_local = _in_memory_documents.get(document_id)
         if doc_local and (doc_local.userId == user_id or not user_id):
             return doc_local
 
-        # Search any local document matching documentId
         for d in _in_memory_documents.values():
             if d.documentId == document_id:
                 return d
         return None
 
     def list_user_documents(self, user_id: str) -> List[DocumentModel]:
-        """Lists all document records belonging to the authenticated user."""
+        """Lists all document records belonging to the authenticated user with a 3s timeout fallback."""
         if self.firestore_db:
-            try:
+            def _fetch_list():
                 docs = (
                     self.firestore_db.collection("documents")
                     .where("userId", "==", user_id)
                     .stream()
                 )
                 return [DocumentModel.from_dict(doc.to_dict()) for doc in docs]
-            except Exception as e:
-                logger.error(f"Firestore list_user_documents error: {str(e)}")
+
+            result = _run_with_timeout(_fetch_list, timeout_sec=3.0)
+            if result is not None:
+                return result
 
         return [d for d in _in_memory_documents.values() if d.userId == user_id or not user_id]
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
         """Deletes a document record, vector chunks, and storage file."""
         if self.firestore_db:
-            try:
+            def _del():
                 self.firestore_db.collection("documents").document(document_id).delete()
-            except Exception as e:
-                logger.error(f"Firestore delete document error: {str(e)}")
+
+            _run_with_timeout(_del, timeout_sec=2.5)
 
         if document_id in _in_memory_documents:
             del _in_memory_documents[document_id]
 
         self.vector_service.delete_document(document_id=document_id, user_id=user_id)
-
         return True
 
     def _store_file(
@@ -341,12 +355,12 @@ class DocumentService:
         return page_count, company_name, financial_year, raw_meta
 
     def _save_to_firestore(self, doc_model: DocumentModel) -> None:
-        """Saves document model to Firestore and in-memory cache."""
+        """Saves document model to Firestore and in-memory cache with timeout safety."""
         _in_memory_documents[doc_model.documentId] = doc_model
         if self.firestore_db:
-            try:
+            def _save():
                 self.firestore_db.collection("documents").document(doc_model.documentId).set(
                     doc_model.to_dict()
                 )
-            except Exception as e:
-                logger.error(f"Firestore document set error: {str(e)}")
+
+            _run_with_timeout(_save, timeout_sec=2.5)

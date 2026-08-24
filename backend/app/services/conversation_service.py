@@ -1,4 +1,5 @@
 import uuid
+import concurrent.futures
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from ..models.conversation_model import ConversationModel, MessageModel
@@ -10,6 +11,17 @@ logger = setup_logger(__name__)
 # In-memory storage fallback for development
 _in_memory_conversations: Dict[str, ConversationModel] = {}
 _in_memory_messages: Dict[str, List[MessageModel]] = {}
+
+
+def _run_with_timeout(func, timeout_sec: float = 2.5):
+    """Executes a function in a worker thread with a strict timeout to prevent Firestore gRPC stalls."""
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func)
+            return future.result(timeout=timeout_sec)
+    except Exception as e:
+        logger.warning(f"Firestore conversation query timed out ({timeout_sec}s) or failed: {str(e)}. Falling back to local storage.")
+        return None
 
 
 class ConversationService:
@@ -42,18 +54,17 @@ class ConversationService:
             messages=[]
         )
 
-        # Store in Firestore
+        # Store in-memory
         _in_memory_conversations[conversation_id] = conv
         _in_memory_messages[conversation_id] = []
 
         if self.firestore_db:
-            try:
+            def _save():
                 self.firestore_db.collection("conversations").document(conversation_id).set(
                     conv.to_dict()
                 )
-                logger.info(f"Created Firestore conversation '{conversation_id}' for user '{user_id}'.")
-            except Exception as e:
-                logger.error(f"Firestore create_conversation error: {str(e)}")
+
+            _run_with_timeout(_save, timeout_sec=2.5)
 
         return conv
 
@@ -63,12 +74,11 @@ class ConversationService:
         document_id: Optional[str] = None
     ) -> List[ConversationModel]:
         """
-        Lists all conversations belonging strictly to the authenticated user.
+        Lists all conversations belonging strictly to the authenticated user with timeout safety.
         """
-        results: List[ConversationModel] = []
-
         if self.firestore_db:
-            try:
+            def _fetch():
+                res = []
                 query = self.firestore_db.collection("conversations").where("userId", "==", user_id)
                 if document_id:
                     query = query.where("documentId", "==", document_id)
@@ -76,16 +86,17 @@ class ConversationService:
                 docs = query.stream()
                 for doc in docs:
                     conv_data = doc.to_dict()
-                    conv = ConversationModel.from_dict(conv_data)
-                    results.append(conv)
+                    res.append(ConversationModel.from_dict(conv_data))
 
-                # Sort by updatedAt descending
-                results.sort(key=lambda c: c.updatedAt, reverse=True)
-                return results
-            except Exception as e:
-                logger.error(f"Firestore list_user_conversations error: {str(e)}")
+                res.sort(key=lambda c: c.updatedAt, reverse=True)
+                return res
+
+            res_list = _run_with_timeout(_fetch, timeout_sec=2.5)
+            if res_list is not None:
+                return res_list
 
         # Fallback in-memory
+        results = []
         for conv in _in_memory_conversations.values():
             if conv.userId == user_id:
                 if not document_id or conv.documentId == document_id:
@@ -100,23 +111,22 @@ class ConversationService:
         user_id: str
     ) -> Optional[ConversationModel]:
         """
-        Retrieves a conversation and its messages.
+        Retrieves a conversation and its messages with timeout safety.
         STRICT SECURITY: Returns None if conversation does not belong to user_id.
         """
         conv: Optional[ConversationModel] = None
 
         if self.firestore_db:
-            try:
+            def _fetch():
                 doc = self.firestore_db.collection("conversations").document(conversation_id).get()
                 if doc.exists:
                     data = doc.to_dict()
-                    # Security check
                     if data.get("userId") != user_id:
-                        logger.warning(f"Access denied: User '{user_id}' attempted to access conversation '{conversation_id}' owned by '{data.get('userId')}'.")
                         return None
-                    conv = ConversationModel.from_dict(data)
-            except Exception as e:
-                logger.error(f"Firestore get_conversation error: {str(e)}")
+                    return ConversationModel.from_dict(data)
+                return None
+
+            conv = _run_with_timeout(_fetch, timeout_sec=2.5)
 
         if not conv:
             local_conv = _in_memory_conversations.get(conversation_id)
@@ -126,7 +136,6 @@ class ConversationService:
         if not conv:
             return None
 
-        # Fetch messages
         conv.messages = self.get_conversation_messages(conversation_id=conversation_id, user_id=user_id)
         return conv
 
@@ -138,10 +147,9 @@ class ConversationService:
         """
         Retrieves all messages for a conversation ordered chronologically.
         """
-        msgs: List[MessageModel] = []
-
         if self.firestore_db:
-            try:
+            def _fetch_msgs():
+                msgs = []
                 docs = (
                     self.firestore_db.collection("conversations")
                     .document(conversation_id)
@@ -154,8 +162,10 @@ class ConversationService:
                     if msg_data.get("userId") == user_id or not msg_data.get("userId"):
                         msgs.append(MessageModel.from_dict(msg_data))
                 return msgs
-            except Exception as e:
-                logger.error(f"Firestore get_conversation_messages error: {str(e)}")
+
+            msgs_res = _run_with_timeout(_fetch_msgs, timeout_sec=2.5)
+            if msgs_res is not None:
+                return msgs_res
 
         return _in_memory_messages.get(conversation_id, [])
 
@@ -184,27 +194,21 @@ class ConversationService:
             createdAt=now_iso
         )
 
-        # Update in-memory
         if conversation_id not in _in_memory_messages:
             _in_memory_messages[conversation_id] = []
         _in_memory_messages[conversation_id].append(msg)
 
         if conversation_id in _in_memory_conversations:
-            conv = _in_memory_conversations[conversation_id]
-            conv.updatedAt = now_iso
-            # Auto-update title if default
-            if role == "user" and (conv.title == "New Financial Analysis" or not conv.title):
-                conv.title = content[:45] + ("..." if len(content) > 45 else "")
+            c = _in_memory_conversations[conversation_id]
+            c.updatedAt = now_iso
+            if role == "user" and (c.title == "New Financial Analysis" or not c.title):
+                c.title = content[:45] + ("..." if len(content) > 45 else "")
 
-        # Persist to Firestore
         if self.firestore_db:
-            try:
-                # Save message
+            def _save_msg():
                 self.firestore_db.collection("conversations").document(conversation_id).collection("messages").document(message_id).set(
                     msg.to_dict()
                 )
-
-                # Update conversation updatedAt & title
                 update_payload: Dict[str, Any] = {"updatedAt": now_iso}
                 if role == "user":
                     conv_doc = self.firestore_db.collection("conversations").document(conversation_id).get()
@@ -214,8 +218,8 @@ class ConversationService:
                             update_payload["title"] = content[:45] + ("..." if len(content) > 45 else "")
 
                 self.firestore_db.collection("conversations").document(conversation_id).update(update_payload)
-            except Exception as e:
-                logger.error(f"Firestore add_message error: {str(e)}")
+
+            _run_with_timeout(_save_msg, timeout_sec=2.5)
 
         return msg
 
@@ -225,10 +229,7 @@ class ConversationService:
         user_id: str,
         title: str
     ) -> bool:
-        """
-        Renames a conversation title.
-        Enforces user ownership.
-        """
+        """Renames a conversation title with timeout safety."""
         now_iso = datetime.utcnow().isoformat()
 
         if conversation_id in _in_memory_conversations:
@@ -239,7 +240,7 @@ class ConversationService:
             conv.updatedAt = now_iso
 
         if self.firestore_db:
-            try:
+            def _update():
                 doc = self.firestore_db.collection("conversations").document(conversation_id).get()
                 if not doc.exists or doc.to_dict().get("userId") != user_id:
                     return False
@@ -248,9 +249,10 @@ class ConversationService:
                     "updatedAt": now_iso
                 })
                 return True
-            except Exception as e:
-                logger.error(f"Firestore update_conversation_title error: {str(e)}")
-                return False
+
+            res = _run_with_timeout(_update, timeout_sec=2.5)
+            if res is not None:
+                return res
 
         return True
 
@@ -259,10 +261,7 @@ class ConversationService:
         conversation_id: str,
         user_id: str
     ) -> bool:
-        """
-        Deletes a conversation and all its messages.
-        Enforces user ownership.
-        """
+        """Deletes a conversation and all its messages with timeout safety."""
         if conversation_id in _in_memory_conversations:
             if _in_memory_conversations[conversation_id].userId != user_id:
                 return False
@@ -271,22 +270,20 @@ class ConversationService:
             del _in_memory_messages[conversation_id]
 
         if self.firestore_db:
-            try:
+            def _del():
                 doc = self.firestore_db.collection("conversations").document(conversation_id).get()
                 if not doc.exists or doc.to_dict().get("userId") != user_id:
                     return False
 
-                # Delete messages subcollection
                 msgs_ref = self.firestore_db.collection("conversations").document(conversation_id).collection("messages").stream()
                 for m in msgs_ref:
                     m.reference.delete()
 
-                # Delete conversation document
                 self.firestore_db.collection("conversations").document(conversation_id).delete()
-                logger.info(f"Deleted conversation '{conversation_id}' for user '{user_id}'.")
                 return True
-            except Exception as e:
-                logger.error(f"Firestore delete_conversation error: {str(e)}")
-                return False
+
+            res = _run_with_timeout(_del, timeout_sec=2.5)
+            if res is not None:
+                return res
 
         return True

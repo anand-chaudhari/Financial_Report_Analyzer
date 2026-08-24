@@ -50,7 +50,8 @@ export const documentService = {
 
   async getDocuments(): Promise<ReportItem[]> {
     try {
-      const response = await apiClient.get<any>('/documents');
+      // 15-second per-request timeout limit for list fetching
+      const response = await apiClient.get<any>('/documents', { timeout: 15000 });
       const data = response.data;
       const list = Array.isArray(data) ? data : data.data || [];
 
