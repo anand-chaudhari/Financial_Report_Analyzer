@@ -34,6 +34,12 @@ def _run_with_timeout(func, timeout_sec: float = 3.0):
         return None
 
 
+def ensure_document_indexed(document_id: str, user_id: str) -> bool:
+    """Module-level function helper to ensure a document is vector indexed in ChromaDB."""
+    service = DocumentService()
+    return service.ensure_document_indexed(document_id=document_id, user_id=user_id)
+
+
 class DocumentService:
     """Service handling document upload, storage, metadata extraction, chunking, vector indexing, and Firestore CRUD."""
 

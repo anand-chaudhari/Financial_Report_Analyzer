@@ -3,7 +3,7 @@ import re
 from typing import Dict, Any, List, Optional
 from ..vectorstore.vector_service import VectorStoreService
 from ..services.document_service import DocumentService, ensure_document_indexed
-from ..llm.groq_client import call_groq_llm
+from ..llm.llm_client import GroqLLMClient
 from ..schemas.summary_schema import DocumentSummaryResponse, SummarySectionItem, KpiCardItem
 from ..utils.logger import setup_logger
 
@@ -18,6 +18,7 @@ class SummaryService:
     def __init__(self):
         self.vector_service = VectorStoreService()
         self.document_service = DocumentService()
+        self.llm_client = GroqLLMClient()
 
     def generate_document_summary(
         self,
@@ -111,9 +112,9 @@ class SummaryService:
 
         parsed_json = None
         try:
-            raw_response = call_groq_llm(
+            raw_response = self.llm_client.generate(
                 prompt=user_prompt,
-                system_prompt=system_prompt,
+                system_instruction=system_prompt,
                 temperature=0.1
             )
 
