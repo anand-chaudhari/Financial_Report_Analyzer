@@ -25,7 +25,7 @@ class ChatService:
         question: str,
         user_id: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
-        top_k: int = 4,
+        top_k: int = 8,
     ) -> ChatResponse:
         """Executes RAG question answering and records conversation history."""
         # 1. Fetch recent history if not explicitly provided

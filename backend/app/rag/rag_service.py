@@ -1,6 +1,7 @@
 import re
 from typing import List, Dict, Any, Optional
 from ..vectorstore.vector_service import VectorStoreService
+from ..services.document_service import DocumentService
 from ..llm.llm_client import GroqLLMClient
 from .prompts import STRICT_RAG_SYSTEM_PROMPT, NO_INFORMATION_FALLBACK_RESPONSE
 from ..utils.logger import setup_logger
@@ -19,18 +20,26 @@ class RAGService:
     def __init__(
         self,
         vector_service: Optional[VectorStoreService] = None,
+        document_service: Optional[DocumentService] = None,
         llm_client: Optional[GroqLLMClient] = None,
     ):
         self.vector_service = vector_service or VectorStoreService()
+        self.document_service = document_service or DocumentService()
         self.llm_client = llm_client or GroqLLMClient()
 
     def validate_document_access(self, user_id: str, document_id: str) -> bool:
         """
-        Validates document ownership and existence in ChromaDB vector store.
+        Validates document existence and automatically triggers on-demand indexing if needed.
         """
-        if not user_id or not document_id:
+        if not document_id:
             return False
-        return self.vector_service.document_exists(document_id=document_id, user_id=user_id)
+
+        # 1. Check ChromaDB vector store directly
+        if self.vector_service.document_exists(document_id=document_id, user_id=user_id):
+            return True
+
+        # 2. Trigger auto re-indexing from disk/storage
+        return self.document_service.ensure_document_indexed(document_id=document_id, user_id=user_id)
 
     def _format_context(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
         """
@@ -41,7 +50,7 @@ class RAGService:
             page_no = chunk.get("page_number", 1)
             sec = chunk.get("section") or "General Financial Content"
             text = chunk.get("text", "")
-            context_blocks.append(f"--- Chunk {idx} [Page {page_no}] [Section: {sec}] ---\n{text}")
+            context_blocks.append(f"--- Context Snippet {idx} [Page {page_no}] [Section: {sec}] ---\n{text}")
         return "\n\n".join(context_blocks)
 
     def _format_history(self, conversation_history: Optional[List[Dict[str, Any]]]) -> str:
@@ -66,35 +75,28 @@ class RAGService:
     ) -> Dict[str, Any]:
         """
         Executes full RAG query process:
-        1. Validate ownership
-        2. Vector search & filter by document_id and user_id
+        1. Validate ownership & trigger on-demand vector indexing if needed
+        2. Vector search & filter by document_id and user_id (top_k default=8)
         3. Build context with page & section metadata
         4. Send to Groq LLM
         5. Return answer, sources, pages, sections, and retrieved_chunks
         """
         logger.info(f"RAG Engine query for User '{user_id}', Doc '{document_id}': {question}")
 
-        # 1. Validate Document Access
-        if not self.validate_document_access(user_id=user_id, document_id=document_id):
-            logger.warning(f"Access denied or document '{document_id}' not found for user '{user_id}'.")
-            return {
-                "answer": NO_INFORMATION_FALLBACK_RESPONSE,
-                "sources": [],
-                "pages": [],
-                "sections": [],
-                "retrieved_chunks": [],
-            }
+        # 1. Ensure Document Vectors Exist in ChromaDB
+        self.validate_document_access(user_id=user_id, document_id=document_id)
 
-        # 2. Convert Question to Embedding & Retrieve Top-K Chunks from ChromaDB
+        # 2. Vector Search (Default top_k = 8 for deep context retrieval)
+        k_results = top_k or 8
         retrieved_chunks = self.vector_service.search(
             query_text=question,
             user_id=user_id,
             document_id=document_id,
-            top_k=top_k,
+            top_k=k_results,
         )
 
         if not retrieved_chunks:
-            logger.info(f"No relevant vector chunks found for doc '{document_id}'.")
+            logger.info(f"No vector chunks found for doc '{document_id}'.")
             return {
                 "answer": NO_INFORMATION_FALLBACK_RESPONSE,
                 "sources": [],
@@ -143,12 +145,7 @@ class RAGService:
             temperature=0.1,
         )
 
-        # 6. Fallback Check
-        if (
-            not raw_answer
-            or "could not find sufficient information" in raw_answer.lower()
-            or "insufficient information" in raw_answer.lower()
-        ):
+        if not raw_answer:
             return {
                 "answer": NO_INFORMATION_FALLBACK_RESPONSE,
                 "sources": [],

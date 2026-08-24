@@ -1,7 +1,12 @@
 import os
+import sys
 import fitz # PyMuPDF
 from app.services.document_service import DocumentService
 from app.rag.rag_service import RAGService
+
+# Reconfigure stdout for UTF-8 on Windows
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 def test_full_pipeline():
     # Create a test PDF in memory

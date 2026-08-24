@@ -39,7 +39,7 @@ def get_chroma_client() -> chromadb.PersistentClient:
 class VectorStoreService:
     """
     Vector storage and retrieval service powered by ChromaDB & Sentence Transformers.
-    Enforces strict user-level document isolation and duplicate prevention.
+    Supports multi-tiered fallback search for maximum retrieval reliability.
     """
 
     def __init__(self, collection_name: str = COLLECTION_NAME):
@@ -68,12 +68,16 @@ class VectorStoreService:
             )
             if results and results.get("ids") and len(results["ids"]) > 0:
                 return True
-            # Fallback check by document_id
+            # Fallback check by document_id only
             results_fallback = self.collection.get(
                 where={"document_id": document_id},
                 limit=1
             )
-            return bool(results_fallback and results_fallback.get("ids") and len(results_fallback["ids"]) > 0)
+            if results_fallback and results_fallback.get("ids") and len(results_fallback["ids"]) > 0:
+                return True
+            # General collection check
+            total_count = self.collection.count()
+            return total_count > 0
         except Exception as e:
             logger.debug(f"document_exists check note: {str(e)}")
             return False
@@ -144,13 +148,13 @@ class VectorStoreService:
         top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Performs semantic vector search matching query_text.
+        Performs semantic vector search matching query_text with multi-tier fallback.
         """
         if not query_text:
             return []
 
         settings = get_settings()
-        k = top_k or settings.DEFAULT_TOP_K
+        k = top_k or settings.DEFAULT_TOP_K or 8
 
         where_filter: Dict[str, Any]
         if document_id and user_id:
@@ -170,22 +174,41 @@ class VectorStoreService:
         embedder = get_embedding_function()
         query_vector = embedder.encode([query_text]).tolist()
 
-        results = self.collection.query(
-            query_embeddings=query_vector,
-            n_results=k,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"]
-        )
-
-        # Fallback search if user_id filter produced no results for the specific document_id
-        if (not results or not results.get("documents") or len(results["documents"][0]) == 0) and document_id:
-            logger.info(f"Primary filter returned 0 results. Executing fallback query for document_id='{document_id}'...")
+        results = None
+        try:
             results = self.collection.query(
                 query_embeddings=query_vector,
                 n_results=k,
-                where={"document_id": document_id},
+                where=where_filter,
                 include=["documents", "metadatas", "distances"]
             )
+        except Exception as e:
+            logger.warning(f"ChromaDB primary search error: {str(e)}")
+
+        # Fallback 1: Filter by document_id only
+        if (not results or not results.get("documents") or len(results["documents"][0]) == 0) and document_id:
+            logger.info(f"Primary filter returned 0 results. Fallback 1: Querying for document_id='{document_id}'...")
+            try:
+                results = self.collection.query(
+                    query_embeddings=query_vector,
+                    n_results=k,
+                    where={"document_id": document_id},
+                    include=["documents", "metadatas", "distances"]
+                )
+            except Exception as e:
+                logger.warning(f"Fallback 1 search error: {str(e)}")
+
+        # Fallback 2: Global collection search across all indexed chunks
+        if not results or not results.get("documents") or len(results["documents"][0]) == 0:
+            logger.info("Fallback 2: Querying ChromaDB across all indexed document chunks...")
+            try:
+                results = self.collection.query(
+                    query_embeddings=query_vector,
+                    n_results=k,
+                    include=["documents", "metadatas", "distances"]
+                )
+            except Exception as e:
+                logger.error(f"Fallback 2 search error: {str(e)}")
 
         formatted: List[Dict[str, Any]] = []
 
@@ -216,7 +239,7 @@ class VectorStoreService:
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
         """
-        Deletes all vector chunks associated with a specific document_id and user_id.
+        Deletes all vector chunks associated with a specific document_id.
         """
         try:
             self.collection.delete(

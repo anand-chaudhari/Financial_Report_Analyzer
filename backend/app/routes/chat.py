@@ -34,7 +34,7 @@ async def chat_rag(
         question=request.question,
         user_id=user_id,
         conversation_history=request.conversation_history,
-        top_k=request.top_k or 4,
+        top_k=request.top_k or 8,
     )
     return response
 
@@ -53,7 +53,7 @@ async def query_report(
         question=request.question,
         user_id=user_id,
         conversation_history=request.conversation_history,
-        top_k=request.top_k or 4,
+        top_k=request.top_k or 8,
     )
     return ApiResponse(
         success=True,

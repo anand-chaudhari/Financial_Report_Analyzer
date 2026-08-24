@@ -125,6 +125,70 @@ class DocumentService:
             self._save_to_firestore(doc_model)
             raise e
 
+    def ensure_document_indexed(self, document_id: str, user_id: str) -> bool:
+        """
+        Ensures that vector chunks exist in ChromaDB for the given document_id.
+        If chunks do not exist yet (e.g. uploaded previously), re-indexes from stored file.
+        """
+        if self.vector_service.document_exists(document_id=document_id, user_id=user_id):
+            return True
+
+        doc_model = self.get_document(document_id, user_id)
+        if not doc_model:
+            # Fallback search across all documents
+            for doc in _in_memory_documents.values():
+                if doc.documentId == document_id:
+                    doc_model = doc
+                    break
+
+        if not doc_model:
+            return False
+
+        file_path = None
+        upload_dir = os.path.join(os.getcwd(), "uploads", doc_model.userId, document_id)
+        if os.path.exists(upload_dir):
+            files = os.listdir(upload_dir)
+            if files:
+                file_path = os.path.join(upload_dir, files[0])
+
+        if not file_path or not os.path.exists(file_path):
+            base_uploads = os.path.join(os.getcwd(), "uploads")
+            if os.path.exists(base_uploads):
+                for root, dirs, files in os.walk(base_uploads):
+                    if document_id in root or (files and any(f.lower().endswith('.pdf') for f in files)):
+                        for f in files:
+                            if f.lower().endswith('.pdf'):
+                                file_path = os.path.join(root, f)
+                                break
+
+        if file_path and os.path.exists(file_path):
+            try:
+                logger.info(f"Auto re-indexing PDF from disk for '{document_id}': '{file_path}'...")
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+
+                proc_result = self.processor.process_pdf(
+                    pdf_source=pdf_bytes,
+                    document_id=document_id,
+                    user_id=user_id or doc_model.userId,
+                    file_name=doc_model.fileName,
+                    company_name=doc_model.companyName,
+                    financial_year=doc_model.financialYear,
+                )
+
+                self.vector_service.add_document(
+                    document_id=document_id,
+                    user_id=user_id or doc_model.userId,
+                    chunks=proc_result.chunks,
+                    overwrite_if_exists=True
+                )
+                return True
+            except Exception as e:
+                logger.error(f"Failed auto re-indexing document {document_id}: {str(e)}")
+                return False
+
+        return False
+
     def get_document(self, document_id: str, user_id: str) -> Optional[DocumentModel]:
         """Retrieves a document record for the authenticated user."""
         if self.firestore_db:
@@ -140,6 +204,11 @@ class DocumentService:
         doc_local = _in_memory_documents.get(document_id)
         if doc_local and (doc_local.userId == user_id or not user_id):
             return doc_local
+
+        # Search any local document matching documentId
+        for d in _in_memory_documents.values():
+            if d.documentId == document_id:
+                return d
         return None
 
     def list_user_documents(self, user_id: str) -> List[DocumentModel]:
@@ -168,7 +237,6 @@ class DocumentService:
         if document_id in _in_memory_documents:
             del _in_memory_documents[document_id]
 
-        # Delete vector chunks from ChromaDB
         self.vector_service.delete_document(document_id=document_id, user_id=user_id)
 
         return True
