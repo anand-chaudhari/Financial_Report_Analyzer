@@ -24,7 +24,7 @@ export const App: React.FC = () => {
     <ThemeProvider>
       <AuthProvider>
         <ReportProvider>
-          <Router>
+          <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <Routes>
               {/* Public Layout / Landing */}
               <Route element={<MainLayout />}>
