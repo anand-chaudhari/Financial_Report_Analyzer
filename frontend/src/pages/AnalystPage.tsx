@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useReportContext } from '../context/ReportContext';
 import { chatService } from '../services/chatService';
+import { conversationService, ConversationItem, SourceMetadata } from '../services/conversationService';
 import {
   Bot,
   Send,
   User,
   Sparkles,
-  FileText,
   UploadCloud,
   CheckCircle2,
   Copy,
@@ -25,41 +25,43 @@ import {
   Building2,
   FileCheck,
   CornerDownLeft,
+  MessageSquare,
+  Plus,
+  Edit3,
+  Clock,
 } from 'lucide-react';
 import { formatBytes } from '../utils/formatters';
 
-interface SourceItem {
-  page_number: number;
-  section: string;
-  document_name: string;
-  snippet?: string;
-  similarity_score?: number;
-}
-
-interface MessageItem {
+interface MessageUIItem {
   id: string;
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
   pages?: number[];
   sections?: string[];
-  sources?: SourceItem[];
-  retrieved_chunks?: Array<any>;
+  sources?: SourceMetadata[];
 }
 
 export const AnalystPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const docIdParam = searchParams.get('doc');
+  const convIdParam = searchParams.get('conv');
   const { reports } = useReportContext();
 
   const [selectedReportId, setSelectedReportId] = useState<string>(docIdParam || (reports[0]?.id ?? ''));
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(convIdParam || null);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [queryText, setQueryText] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorState, setErrorState] = useState<string | null>(null);
-  const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [messages, setMessages] = useState<MessageUIItem[]>([]);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
-  const [activeSourceModal, setActiveSourceModal] = useState<SourceItem | null>(null);
+  const [activeSourceModal, setActiveSourceModal] = useState<SourceMetadata | null>(null);
+
+  // Rename Conversation Modal state
+  const [editingConvModal, setEditingConvModal] = useState<ConversationItem | null>(null);
+  const [editTitleInput, setEditTitleInput] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -72,7 +74,54 @@ export const AnalystPage: React.FC = () => {
 
   const activeReport = reports.find((r) => r.id === selectedReportId || r.documentId === selectedReportId);
 
-  // Auto-scroll to bottom of chat
+  // Load User Conversations for selected report
+  const loadConversations = useCallback(async () => {
+    const list = await conversationService.getConversations(selectedReportId);
+    setConversations(list);
+
+    if (convIdParam && !activeConversationId) {
+      const match = list.find((c) => c.conversationId === convIdParam);
+      if (match) {
+        setActiveConversationId(match.conversationId);
+      }
+    }
+  }, [selectedReportId, convIdParam, activeConversationId]);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
+  // Load messages when activeConversationId changes
+  const loadConversationMessages = useCallback(async (convId: string) => {
+    setLoading(true);
+    setErrorState(null);
+    try {
+      const conv = await conversationService.getConversation(convId);
+      if (conv && conv.messages) {
+        const mapped: MessageUIItem[] = conv.messages.map((m) => ({
+          id: m.messageId,
+          sender: m.role as 'user' | 'assistant',
+          text: m.content,
+          timestamp: new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          sources: m.sources,
+          pages: m.sources ? Array.from(new Set(m.sources.map((s) => s.page_number))) : [],
+          sections: m.sources ? Array.from(new Set(m.sources.map((s) => s.section))) : [],
+        }));
+        setMessages(mapped);
+      }
+    } catch (err: any) {
+      console.warn('Error loading conversation messages:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeConversationId) {
+      loadConversationMessages(activeConversationId);
+    }
+  }, [activeConversationId, loadConversationMessages]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -90,13 +139,28 @@ export const AnalystPage: React.FC = () => {
     "What are the key financial highlights?",
   ];
 
+  const handleStartNewConversation = () => {
+    setActiveConversationId(null);
+    setMessages([]);
+    setErrorState(null);
+    setSearchParams(selectedReportId ? { doc: selectedReportId } : {});
+  };
+
+  const handleSelectConversation = (conv: ConversationItem) => {
+    setActiveConversationId(conv.conversationId);
+    if (conv.documentId) {
+      setSelectedReportId(conv.documentId);
+    }
+    setSearchParams({ doc: conv.documentId || selectedReportId, conv: conv.conversationId });
+  };
+
   const handleSendQuery = async (promptText: string) => {
     if (!promptText.trim() || loading) return;
 
     setErrorState(null);
     const userPrompt = promptText.trim();
 
-    const userMsg: MessageItem = {
+    const userMsg: MessageUIItem = {
       id: `usr_${Date.now()}`,
       sender: 'user',
       text: userPrompt,
@@ -117,21 +181,26 @@ export const AnalystPage: React.FC = () => {
         text: m.text,
       }));
 
-      // Direct live API connection to POST /api/chat
+      // Live POST /api/chat call saving user question & AI response to Firestore
       const resData = await chatService.sendChat({
+        conversation_id: activeConversationId || undefined,
         document_id: selectedReportId || activeReport?.id || activeReport?.documentId || 'doc_unknown',
         question: userPrompt,
         conversation_history: historyForBackend,
       });
 
       if (resData && resData.answer) {
-        // Construct structured source cards
+        if (resData.conversationId && !activeConversationId) {
+          setActiveConversationId(resData.conversationId);
+          setSearchParams({ doc: selectedReportId, conv: resData.conversationId });
+        }
+
         const fileName = activeReport?.fileName || activeReport?.filename || 'Financial_Report.pdf';
         const pageList = resData.pages || [];
         const sectionList = resData.sections || [];
         const chunks = resData.retrieved_chunks || [];
 
-        const structuredSources: SourceItem[] = [];
+        const structuredSources: SourceMetadata[] = [];
 
         if (chunks.length > 0) {
           chunks.forEach((c: any) => {
@@ -154,24 +223,24 @@ export const AnalystPage: React.FC = () => {
           });
         }
 
-        const aiMsg: MessageItem = {
-          id: `ai_${Date.now()}`,
+        const aiMsg: MessageUIItem = {
+          id: resData.messageId || `ai_${Date.now()}`,
           sender: 'assistant',
           text: resData.answer,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           pages: pageList,
           sections: sectionList,
           sources: structuredSources,
-          retrieved_chunks: chunks,
         };
 
         setMessages((prev) => [...prev, aiMsg]);
         setLoading(false);
+        await loadConversations();
       } else {
-        throw new Error('Invalid or empty response returned from AI Analyst engine.');
+        throw new Error('Invalid response from AI Analyst service.');
       }
     } catch (err: any) {
-      console.error('API /api/chat request error:', err);
+      console.error('API /api/chat error:', err);
       setLoading(false);
       const errDetail = err?.response?.data?.detail || err?.message || 'Failed to connect to AI Analyst backend service.';
       setErrorState(errDetail);
@@ -191,9 +260,33 @@ export const AnalystPage: React.FC = () => {
     }
   };
 
-  const handleClearConversation = () => {
-    setMessages([]);
-    setErrorState(null);
+  const handleClearConversation = async () => {
+    if (activeConversationId) {
+      await conversationService.deleteConversation(activeConversationId);
+      await loadConversations();
+      handleStartNewConversation();
+    } else {
+      setMessages([]);
+      setErrorState(null);
+    }
+  };
+
+  const handleDeleteConv = async (convId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await conversationService.deleteConversation(convId);
+    await loadConversations();
+    if (activeConversationId === convId) {
+      handleStartNewConversation();
+    }
+  };
+
+  const handleRenameConvSubmit = async () => {
+    if (editingConvModal && editTitleInput.trim()) {
+      await conversationService.renameConversation(editingConvModal.conversationId, editTitleInput.trim());
+      setEditingConvModal(null);
+      setEditTitleInput('');
+      await loadConversations();
+    }
   };
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -211,32 +304,30 @@ export const AnalystPage: React.FC = () => {
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full min-w-0 pb-6 animate-fade-in">
-      {/* LEFT PANEL: Selected Report Information & Details */}
+      {/* LEFT PANEL: Report Details & Persistent Conversation History */}
       <div className="w-full lg:w-80 flex-shrink-0 space-y-4">
-        <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+        {/* Selected Report Card */}
+        <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
           <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <FileCheck className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
-                Selected Report
+                Target Report
               </h2>
-              <p className="text-[11px] text-slate-500">Document Metadata & Vector Status</p>
+              <p className="text-[11px] text-slate-500">Selected Filing Metadata</p>
             </div>
           </div>
 
-          {/* Report Selector Dropdown */}
+          {/* Selector */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Target Report File
-            </label>
             {reports.length > 0 ? (
               <select
                 value={selectedReportId}
                 onChange={(e) => {
                   setSelectedReportId(e.target.value);
-                  setErrorState(null);
+                  handleStartNewConversation();
                 }}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 truncate cursor-pointer shadow-sm"
               >
@@ -252,79 +343,116 @@ export const AnalystPage: React.FC = () => {
                 className="w-full px-4 py-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors"
               >
                 <UploadCloud className="w-4 h-4" />
-                <span>Upload PDF First</span>
+                <span>Upload PDF Filing</span>
               </button>
             )}
           </div>
 
-          {/* Detailed Metadata Breakdown */}
-          {activeReport ? (
-            <div className="space-y-3 pt-1">
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 space-y-2.5 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500 flex items-center gap-1.5 text-[11px]">
-                    <Building2 className="w-3.5 h-3.5" /> Company:
-                  </span>
-                  <span className="font-bold text-slate-900 dark:text-white truncate max-w-[140px]">
-                    {activeReport.companyName || activeReport.company_name || 'Corporate Entity'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500 flex items-center gap-1.5 text-[11px]">
-                    <Calendar className="w-3.5 h-3.5" /> Fiscal Period:
-                  </span>
-                  <span className="font-bold text-slate-900 dark:text-white">
-                    {activeReport.financialYear || activeReport.fiscal_period || 'FY2024'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500 flex items-center gap-1.5 text-[11px]">
-                    <BookOpen className="w-3.5 h-3.5" /> Page Count:
-                  </span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                    {activeReport.pageCount || activeReport.total_pages || 1} Pages
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500 flex items-center gap-1.5 text-[11px]">
-                    <Layers className="w-3.5 h-3.5" /> File Size:
-                  </span>
-                  <span className="font-medium text-slate-700 dark:text-slate-300">
-                    {formatBytes(activeReport.fileSize || activeReport.file_size || 1024 * 500)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Status Badge */}
-              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                  <span>Processing Status</span>
-                </div>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-[10px] font-extrabold uppercase tracking-wider">
-                  Indexed
+          {activeReport && (
+            <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500 text-[11px]">Company:</span>
+                <span className="font-bold text-slate-900 dark:text-white truncate max-w-[130px]">
+                  {activeReport.companyName || activeReport.company_name}
                 </span>
               </div>
-            </div>
-          ) : (
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-              No report selected. Upload a PDF filing to start.
+              <div className="flex justify-between">
+                <span className="text-slate-500 text-[11px]">Fiscal Period:</span>
+                <span className="font-bold text-slate-900 dark:text-white">
+                  {activeReport.financialYear || activeReport.fiscal_period}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 text-[11px]">Page Count:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                  {activeReport.pageCount || activeReport.total_pages} Pages
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 text-[11px]">Vector Status:</span>
+                <span className="font-bold text-emerald-500 text-[10px] uppercase">100% Indexed</span>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Suggested Financial Questions */}
-        <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-emerald-500" />
-            <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
-              Suggested Prompts
-            </h3>
+        {/* Conversation History Sidebar */}
+        <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-emerald-500" />
+              <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                Firestore History
+              </h3>
+            </div>
+            <button
+              onClick={handleStartNewConversation}
+              className="px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Chat</span>
+            </button>
           </div>
-          <div className="space-y-2">
+
+          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+            {conversations.length > 0 ? (
+              conversations.map((c) => {
+                const isActive = c.conversationId === activeConversationId;
+                return (
+                  <div
+                    key={c.conversationId}
+                    onClick={() => handleSelectConversation(c)}
+                    className={`p-3 rounded-2xl border text-xs transition-all cursor-pointer flex items-center justify-between group ${
+                      isActive
+                        ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                        : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <div className="min-w-0 pr-2 space-y-0.5">
+                      <p className="truncate text-xs font-semibold">{c.title}</p>
+                      <p className="text-[10px] text-slate-400 font-normal">
+                        {new Date(c.updatedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingConvModal(c);
+                          setEditTitleInput(c.title);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white"
+                        title="Rename conversation"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteConv(c.conversationId, e)}
+                        className="p-1 text-slate-400 hover:text-rose-500"
+                        title="Delete conversation"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="p-4 text-center text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
+                No past conversations for this report. Ask a question below to start!
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Suggested Prompts */}
+        <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Suggested Prompts</span>
+          </div>
+          <div className="space-y-1.5">
             {suggestedQuestions.map((q, idx) => (
               <button
                 key={idx}
@@ -349,10 +477,10 @@ export const AnalystPage: React.FC = () => {
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-extrabold text-slate-900 dark:text-white tracking-tight truncate">
-                AI Analyst Conversation
+                AI Financial Analyst
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                Grounded Q&A via POST /api/chat with Groq LLM & ChromaDB page sources
+                {activeConversationId ? 'Continuing persistent conversation' : 'New Q&A Thread'} • POST /api/chat
               </p>
             </div>
           </div>
@@ -365,14 +493,14 @@ export const AnalystPage: React.FC = () => {
                 title="Clear current conversation"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Clear Chat</span>
+                <span className="hidden sm:inline">Delete Thread</span>
               </button>
             )}
           </div>
         </div>
 
         {/* Conversation Message Stream */}
-        <div className="flex-1 min-h-[440px] max-h-[600px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+        <div className="flex-1 min-h-[460px] max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
           {messages.length > 0 ? (
             messages.map((msg) => (
               <div
@@ -474,10 +602,10 @@ export const AnalystPage: React.FC = () => {
             <div className="py-20 text-center space-y-3">
               <Bot className="w-14 h-14 text-slate-300 dark:text-slate-700 mx-auto" />
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                AI Analyst Conversation Ready
+                Start AI Financial Analysis
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                Ask any question about your selected financial report or click one of the suggested prompts on the left.
+                Ask any question about your selected financial report. Questions, answers, and sources will be saved to your Firestore account history.
               </p>
             </div>
           )}
@@ -495,7 +623,7 @@ export const AnalystPage: React.FC = () => {
                   <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Querying POST /api/chat with Groq LLM & ChromaDB page embeddings...
+                  Querying POST /api/chat with Groq LLM & saving to Firestore...
                 </span>
               </div>
             </div>
@@ -551,12 +679,12 @@ export const AnalystPage: React.FC = () => {
             <span className="flex items-center gap-1">
               <CornerDownLeft className="w-3 h-3" /> Press Enter to send, Shift+Enter for new line
             </span>
-            <span>Grounded Q&A • Groq Llama-3.3 70B & ChromaDB</span>
+            <span>Firestore History Active • Groq Llama-3.3 70B & ChromaDB</span>
           </div>
         </div>
       </div>
 
-      {/* SOURCE CITATION MODAL / DRAWER */}
+      {/* SOURCE CITATION MODAL */}
       {activeSourceModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-2xl w-full shadow-2xl space-y-4 relative">
@@ -603,6 +731,39 @@ export const AnalystPage: React.FC = () => {
                 className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs cursor-pointer"
               >
                 Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RENAME CONVERSATION MODAL */}
+      {editingConvModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4 relative">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+              Rename Conversation Thread
+            </h3>
+            <input
+              type="text"
+              value={editTitleInput}
+              onChange={(e) => setEditTitleInput(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              placeholder="Enter new conversation title..."
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setEditingConvModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRenameConvSubmit}
+                disabled={!editTitleInput.trim()}
+                className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs cursor-pointer disabled:opacity-50"
+              >
+                Save Changes
               </button>
             </div>
           </div>

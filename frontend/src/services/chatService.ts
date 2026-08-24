@@ -2,12 +2,17 @@ import apiClient from './api';
 import { ApiResponse, ChatQueryRequest, ChatQueryResponse, ChatMessage } from '../types';
 
 export interface DirectChatRequest {
-  document_id: string;
+  document_id?: string;
+  documentId?: string;
+  conversation_id?: string;
+  conversationId?: string;
   question: string;
-  conversation_history?: Array<{ sender: string; text: string }>;
+  conversation_history?: Array<{ sender?: string; role?: string; text?: string; content?: string }>;
 }
 
 export interface DirectChatResponse {
+  conversationId?: string;
+  messageId?: string;
   answer: string;
   sources: string[];
   pages: number[];
