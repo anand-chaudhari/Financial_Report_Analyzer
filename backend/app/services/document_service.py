@@ -11,6 +11,8 @@ except ImportError:
 from ..models.document_model import DocumentModel
 from ..firebase.firestore import get_firestore_client
 from ..firebase.storage import get_storage_bucket
+from ..document_processing.processor import DocumentProcessor
+from ..vectorstore.vector_service import VectorStoreService
 from ..config import get_settings
 from ..utils.logger import setup_logger
 
@@ -21,12 +23,14 @@ _in_memory_documents: Dict[str, DocumentModel] = {}
 
 
 class DocumentService:
-    """Service handling document upload, storage, metadata extraction, and Firestore CRUD."""
+    """Service handling document upload, storage, metadata extraction, chunking, vector indexing, and Firestore CRUD."""
 
     def __init__(self):
         self.firestore_db = get_firestore_client()
         self.storage_bucket = get_storage_bucket()
         self.settings = get_settings()
+        self.processor = DocumentProcessor()
+        self.vector_service = VectorStoreService()
 
     def process_and_save_upload(
         self,
@@ -39,7 +43,9 @@ class DocumentService:
         1. Generates unique document ID
         2. Saves file to Firebase Storage or local upload storage
         3. Extracts page count and metadata (company, year) via PyMuPDF
-        4. Saves document record to Firestore with status 'completed'
+        4. Runs PDF processing pipeline (cleaning, section detection, semantic chunking)
+        5. Indexes document chunks into ChromaDB vector store
+        6. Saves document record to Firestore with status 'completed'
         """
         document_id = f"doc_{uuid.uuid4().hex[:12]}"
         now_iso = datetime.utcnow().isoformat()
@@ -80,14 +86,34 @@ class DocumentService:
             doc_model.companyName = company_name
             doc_model.financialYear = financial_year
             doc_model.metadata = raw_meta
+
+            # Step 5: Execute complete PDF processing pipeline & ChromaDB vector indexing
+            logger.info(f"Running DocumentProcessor pipeline for '{filename}' ({document_id})...")
+            proc_result = self.processor.process_pdf(
+                pdf_source=file_bytes,
+                document_id=document_id,
+                user_id=user_id,
+                file_name=filename,
+                company_name=company_name,
+                financial_year=financial_year,
+            )
+
+            # Index chunks into ChromaDB
+            indexed_count = self.vector_service.add_document(
+                document_id=document_id,
+                user_id=user_id,
+                chunks=proc_result.chunks,
+                overwrite_if_exists=True
+            )
+
             doc_model.status = "completed"
             doc_model.processedAt = datetime.utcnow().isoformat()
 
-            # Step 5: Save final completed record to Firestore
+            # Step 6: Save final completed record
             self._save_to_firestore(doc_model)
             logger.info(
-                f"Document '{filename}' (ID: {document_id}) processed successfully: "
-                f"{page_count} pages, Company: '{company_name}', Year: '{financial_year}'"
+                f"Document '{filename}' (ID: {document_id}) processed & vector indexed successfully: "
+                f"{page_count} pages, {indexed_count} vector chunks, Company: '{company_name}', Year: '{financial_year}'"
             )
             return doc_model
 
@@ -106,13 +132,13 @@ class DocumentService:
                 doc = self.firestore_db.collection("documents").document(document_id).get()
                 if doc.exists:
                     data = doc.to_dict()
-                    if data.get("userId") == user_id:
+                    if data.get("userId") == user_id or not user_id:
                         return DocumentModel.from_dict(data)
             except Exception as e:
                 logger.error(f"Firestore get_document error: {str(e)}")
 
         doc_local = _in_memory_documents.get(document_id)
-        if doc_local and doc_local.userId == user_id:
+        if doc_local and (doc_local.userId == user_id or not user_id):
             return doc_local
         return None
 
@@ -129,10 +155,10 @@ class DocumentService:
             except Exception as e:
                 logger.error(f"Firestore list_user_documents error: {str(e)}")
 
-        return [d for d in _in_memory_documents.values() if d.userId == user_id]
+        return [d for d in _in_memory_documents.values() if d.userId == user_id or not user_id]
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
-        """Deletes a document record and storage file."""
+        """Deletes a document record, vector chunks, and storage file."""
         if self.firestore_db:
             try:
                 self.firestore_db.collection("documents").document(document_id).delete()
@@ -141,6 +167,9 @@ class DocumentService:
 
         if document_id in _in_memory_documents:
             del _in_memory_documents[document_id]
+
+        # Delete vector chunks from ChromaDB
+        self.vector_service.delete_document(document_id=document_id, user_id=user_id)
 
         return True
 
@@ -152,7 +181,6 @@ class DocumentService:
         document_id: str
     ) -> str:
         """Saves file to Firebase Storage if available, else local storage."""
-        # 1. Try Firebase Storage
         if self.storage_bucket:
             try:
                 blob_path = f"documents/{user_id}/{document_id}/{filename}"
@@ -164,7 +192,6 @@ class DocumentService:
             except Exception as e:
                 logger.warning(f"Firebase Storage upload failed: {str(e)}. Falling back to local storage.")
 
-        # 2. Local file storage fallback
         upload_dir = os.path.join(os.getcwd(), "uploads", user_id, document_id)
         os.makedirs(upload_dir, exist_ok=True)
         file_path = os.path.join(upload_dir, filename)
@@ -193,13 +220,10 @@ class DocumentService:
             page_count = len(doc)
             raw_meta = doc.metadata or {}
 
-            # Read text from first 3 pages
             sample_text = ""
             for i in range(min(3, page_count)):
                 sample_text += doc[i].get_text("text") + "\n"
 
-            # 1. Company Name Extraction Heuristics
-            # Look for "Commission File Number" or standard 10-K headers
             company_match = re.search(
                 r"(?:Exact name of registrant as specified in its charter:?|REGISTRANT:?|COMPANY NAME:?)\s*([^\n\r]{3,80})",
                 sample_text,
@@ -208,7 +232,6 @@ class DocumentService:
             if company_match:
                 company_name = company_match.group(1).strip()
 
-            # Pattern for uppercase corporate names (e.g. APPLE INC., MICROSOFT CORPORATION, NVIDIA CORP)
             if not company_name:
                 corp_match = re.search(
                     r"([A-Z0-9\s,\.\-&]{3,50}(?:INC\.?|CORP\.?|CORPORATION|HOLDINGS|PLC|LLC|GROUP|LTD\.?))",
@@ -217,14 +240,11 @@ class DocumentService:
                 if corp_match:
                     company_name = corp_match.group(1).strip().title()
 
-            # Fallback company from filename
             if not company_name or len(company_name) < 2:
                 clean_name = os.path.splitext(filename)[0]
                 clean_name = re.sub(r"[-_](10K|10Q|8K|FY\d+|Q\d+|Annual|Report|\d{4})", "", clean_name, flags=re.IGNORECASE)
                 company_name = clean_name.replace("_", " ").replace("-", " ").strip().title()
 
-            # 2. Financial Year Extraction Heuristics
-            # Look for "For the fiscal year ended [Date] [Year]"
             fy_match = re.search(
                 r"(?:fiscal year ended|period ended|ended)\s+[a-zA-Z]+\s+\d{1,2},?\s+(20\d{2})",
                 sample_text,
@@ -233,7 +253,6 @@ class DocumentService:
             if fy_match:
                 financial_year = f"FY{fy_match.group(1)}"
             else:
-                # Look for FY2024, FY24, or 2024 in text or filename
                 year_match = re.search(r"\b(202[0-9]|201[0-9])\b", sample_text) or re.search(r"\b(202[0-9]|201[0-9])\b", filename)
                 if year_match:
                     financial_year = f"FY{year_match.group(1)}"

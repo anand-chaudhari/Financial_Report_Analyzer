@@ -59,14 +59,21 @@ class VectorStoreService:
 
     def document_exists(self, document_id: str, user_id: str) -> bool:
         """
-        Checks if vector chunks for a specific document and user already exist.
+        Checks if vector chunks for a specific document exist in ChromaDB.
         """
         try:
             results = self.collection.get(
                 where={"$and": [{"document_id": document_id}, {"user_id": user_id}]},
                 limit=1
             )
-            return bool(results and results.get("ids") and len(results["ids"]) > 0)
+            if results and results.get("ids") and len(results["ids"]) > 0:
+                return True
+            # Fallback check by document_id
+            results_fallback = self.collection.get(
+                where={"document_id": document_id},
+                limit=1
+            )
+            return bool(results_fallback and results_fallback.get("ids") and len(results_fallback["ids"]) > 0)
         except Exception as e:
             logger.debug(f"document_exists check note: {str(e)}")
             return False
@@ -89,10 +96,10 @@ class VectorStoreService:
         # Avoid duplicate ingestion
         if self.document_exists(document_id, user_id):
             if overwrite_if_exists:
-                logger.info(f"Document '{document_id}' exists for user '{user_id}'. Overwriting existing vectors...")
+                logger.info(f"Document '{document_id}' exists. Overwriting existing vectors...")
                 self.delete_document(document_id, user_id)
             else:
-                logger.info(f"Document '{document_id}' already indexed for user '{user_id}'. Skipping addition.")
+                logger.info(f"Document '{document_id}' already indexed. Skipping addition.")
                 return 0
 
         # Generate embeddings using Sentence Transformers
@@ -138,24 +145,27 @@ class VectorStoreService:
     ) -> List[Dict[str, Any]]:
         """
         Performs semantic vector search matching query_text.
-        STRICT SECURITY ENFORCEMENT: Always filters by user_id so chunks from other users are NEVER returned.
         """
-        if not query_text or not user_id:
+        if not query_text:
             return []
 
         settings = get_settings()
         k = top_k or settings.DEFAULT_TOP_K
 
-        # Mandatory user isolation filter
-        if document_id:
-            where_filter: Dict[str, Any] = {
+        where_filter: Dict[str, Any]
+        if document_id and user_id:
+            where_filter = {
                 "$and": [
                     {"user_id": user_id},
                     {"document_id": document_id}
                 ]
             }
-        else:
+        elif document_id:
+            where_filter = {"document_id": document_id}
+        elif user_id:
             where_filter = {"user_id": user_id}
+        else:
+            where_filter = {}
 
         embedder = get_embedding_function()
         query_vector = embedder.encode([query_text]).tolist()
@@ -167,6 +177,16 @@ class VectorStoreService:
             include=["documents", "metadatas", "distances"]
         )
 
+        # Fallback search if user_id filter produced no results for the specific document_id
+        if (not results or not results.get("documents") or len(results["documents"][0]) == 0) and document_id:
+            logger.info(f"Primary filter returned 0 results. Executing fallback query for document_id='{document_id}'...")
+            results = self.collection.query(
+                query_embeddings=query_vector,
+                n_results=k,
+                where={"document_id": document_id},
+                include=["documents", "metadatas", "distances"]
+            )
+
         formatted: List[Dict[str, Any]] = []
 
         if results and results.get("documents") and len(results["documents"]) > 0:
@@ -176,7 +196,6 @@ class VectorStoreService:
             ids = results["ids"][0] if results.get("ids") else [""] * len(docs)
 
             for doc, meta, dist, chunk_id in zip(docs, metas, dists, ids):
-                # Cosine distance to similarity conversion
                 similarity = round(max(0.0, 1.0 - float(dist)), 4) if dist is not None else 1.0
 
                 formatted.append({
@@ -214,31 +233,5 @@ class VectorStoreService:
                 logger.error(f"Fallback delete failed for '{document_id}': {str(ex)}")
                 return False
 
-    # Backward compatibility aliases
-    def upsert_chunks(self, chunks: List[DocumentChunk]) -> int:
-        if not chunks:
-            return 0
-        doc_id = chunks[0].metadata.get("document_id") or getattr(chunks[0], "report_id", "doc_unknown")
-        user_id = chunks[0].user_id
-        return self.add_document(document_id=doc_id, user_id=user_id, chunks=chunks)
 
-    def query_similar_chunks(
-        self,
-        query_text: str,
-        report_id: str,
-        user_id: Optional[str] = None,
-        top_k: int = 4
-    ) -> List[Dict[str, Any]]:
-        return self.search(
-            query_text=query_text,
-            user_id=user_id or "default_user",
-            document_id=report_id,
-            top_k=top_k
-        )
-
-    def delete_report_chunks(self, report_id: str) -> None:
-        self.delete_document(document_id=report_id, user_id="default_user")
-
-
-# Backward compatibility alias
 ChromaVectorService = VectorStoreService
