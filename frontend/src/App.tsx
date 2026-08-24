@@ -17,6 +17,7 @@ import { AnalyticsPage } from './pages/AnalyticsPage';
 import { ChatHistoryPage } from './pages/ChatHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportAnalysisPage } from './pages/ReportAnalysisPage';
+import { ReportSummaryPage } from './pages/ReportSummaryPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 export const App: React.FC = () => {
@@ -64,6 +65,14 @@ export const App: React.FC = () => {
                   }
                 />
                 <Route
+                  path="/summary"
+                  element={
+                    <ProtectedRoute>
+                      <ReportSummaryPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="/analytics"
                   element={
                     <ProtectedRoute>
@@ -84,6 +93,14 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute>
                       <SettingsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/reports/:id/summary"
+                  element={
+                    <ProtectedRoute>
+                      <ReportSummaryPage />
                     </ProtectedRoute>
                   }
                 />

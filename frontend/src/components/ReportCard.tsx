@@ -11,6 +11,7 @@ import {
   Bot,
   Trash2,
   AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 
 interface ReportCardProps {
@@ -141,12 +142,19 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report, onAnalyze, onDel
             </button>
           )}
           <button
+            onClick={() => navigate(`/reports/${report.id}/summary`)}
+            title="View AI Grounded Summary"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Summary</span>
+          </button>
+          <button
             onClick={onAnalyze || (() => navigate(`/analyst?doc=${report.id}`))}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold transition-all cursor-pointer"
           >
             <Bot className="w-3.5 h-3.5" />
             <span>Ask AI</span>
-            <ArrowRight className="w-3 h-3" />
           </button>
         </div>
       </div>

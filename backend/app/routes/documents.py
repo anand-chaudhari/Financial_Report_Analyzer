@@ -2,11 +2,13 @@ from typing import Dict, Any, List
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from ..api.deps import get_current_user
 from ..services.document_service import DocumentService
+from ..services.summary_service import SummaryService
 from ..schemas.document_schema import (
     DocumentUploadResponse,
     DocumentListResponse,
     DocumentMetadata,
 )
+from ..schemas.summary_schema import DocumentSummaryResponse
 from ..utils.helpers import sanitize_filename
 from ..config import get_settings
 from ..utils.logger import setup_logger
@@ -15,6 +17,7 @@ logger = setup_logger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 document_service = DocumentService()
+summary_service = SummaryService()
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -187,6 +190,38 @@ async def get_document(
         message="Document retrieved successfully.",
         data=metadata
     )
+
+
+@router.post("/{document_id}/summary", response_model=DocumentSummaryResponse)
+async def generate_document_summary(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Generates a grounded 11-section financial summary for the specified document:
+    1. Executive Summary
+    2. Key Financial Highlights
+    3. Revenue
+    4. Profit/Loss
+    5. Major Expenses
+    6. Assets
+    7. Liabilities
+    8. Cash Flow
+    9. Business Risks
+    10. Management Discussion
+    11. Future Plans
+    STRICT GROUNDING: Sections without supporting text are marked 'Not available in the uploaded report.'
+    """
+    user_id = current_user["uid"]
+    try:
+        summary = summary_service.generate_document_summary(document_id=document_id, user_id=user_id)
+        return summary
+    except Exception as e:
+        logger.error(f"Error generating document summary for '{document_id}': {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate document summary: {str(e)}"
+        )
 
 
 @router.delete("/{document_id}")
