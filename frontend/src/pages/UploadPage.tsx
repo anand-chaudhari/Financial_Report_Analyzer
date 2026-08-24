@@ -1,19 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, FileText, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle2, AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import { formatBytes } from '../utils/formatters';
 import { useReportContext } from '../context/ReportContext';
 import { ReportItem } from '../types/report';
 
 export const UploadPage: React.FC = () => {
   const navigate = useNavigate();
-  const { uploadReport } = useReportContext();
+  const { uploadReport, fetchReports } = useReportContext();
 
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadStep, setUploadStep] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uploadedResult, setUploadedResult] = useState<ReportItem | null>(null);
+
+  useEffect(() => {
+    let interval: any;
+    if (uploading) {
+      setUploadStep(1);
+      interval = setInterval(() => {
+        setUploadStep((prev) => (prev < 3 ? prev + 1 : prev));
+      }, 6000);
+    }
+    return () => clearInterval(interval);
+  }, [uploading]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -38,11 +50,13 @@ export const UploadPage: React.FC = () => {
       const result = await uploadReport(selectedFile);
       setUploadedResult(result);
       setUploading(false);
+      await fetchReports();
       setTimeout(() => {
         navigate('/reports');
       }, 2000);
     } catch (err: any) {
       setUploading(false);
+      await fetchReports();
       setErrorMessage(err?.message || 'Failed to upload and process PDF file. Please try again.');
     }
   };
@@ -87,14 +101,29 @@ export const UploadPage: React.FC = () => {
         }`}
       >
         {uploading ? (
-          <div className="py-10 space-y-4">
-            <div className="w-12 h-12 border-3 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
-            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Processing & Chunking PDF Filing...
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-              Extracting text page-by-page, identifying sections, and generating vector embeddings in ChromaDB.
-            </p>
+          <div className="py-10 space-y-5">
+            <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin" />
+              <Loader2 className="w-7 h-7 text-emerald-500 animate-spin" />
+            </div>
+
+            <div className="space-y-1.5 max-w-md mx-auto">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                Processing & Embedding PDF Filing...
+              </h3>
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold animate-pulse">
+                {uploadStep === 1 && '• Step 1: Extracting page text & financial statements via PyMuPDF...'}
+                {uploadStep === 2 && '• Step 2: Semantic chunking & generating SentenceTransformers embeddings...'}
+                {uploadStep === 3 && '• Step 3: Indexing vector chunks into ChromaDB persistent store...'}
+              </p>
+            </div>
+
+            <div className="w-full max-w-xs mx-auto bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-emerald-500 h-full transition-all duration-1000 rounded-full"
+                style={{ width: uploadStep === 1 ? '35%' : uploadStep === 2 ? '70%' : '95%' }}
+              />
+            </div>
           </div>
         ) : uploadedResult ? (
           <div className="py-8 space-y-4 text-emerald-600 dark:text-emerald-400 max-w-md mx-auto">

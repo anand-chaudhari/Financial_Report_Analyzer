@@ -7,11 +7,12 @@ export const documentService = {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Call /api/documents/upload or /api/v1/documents/upload
+    // Call /api/documents/upload with 300,000ms (5 min) timeout for PDF processing + SentenceTransformer vector indexing
     const response = await apiClient.post<any>('/documents/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 300000,
     });
 
     const resData = response.data;

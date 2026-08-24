@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useReportContext } from '../context/ReportContext';
@@ -8,42 +8,28 @@ import { EmptyState } from '../components/EmptyState';
 import {
   FileText,
   CheckCircle2,
-  HelpCircle,
   Zap,
   UploadCloud,
   Bot,
-  BarChart3,
-  ArrowRight,
   Sparkles,
   Search,
-  Filter,
-  FileSpreadsheet,
-  Clock,
   BookOpen,
-  Plus,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
-import { formatBytes } from '../utils/formatters';
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { reports, uploadReport, deleteReport, loading } = useReportContext();
+  const { reports, uploadReport, deleteReport, fetchReports } = useReportContext();
 
   const [selectedFilter, setSelectedFilter] = useState<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadStep, setUploadStep] = useState(1);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
-
-  const filterOptions: Array<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'> = [
-    'All',
-    '10-K',
-    '10-Q',
-    'Earnings',
-    'Annual',
-  ];
 
   const filteredReports = reports.filter((r) => {
     const type = r.filingType || '10-K';
@@ -60,6 +46,17 @@ export const DashboardPage: React.FC = () => {
 
   const totalPagesCount = reports.reduce((acc, r) => acc + (r.pageCount || r.total_pages || 0), 0);
 
+  useEffect(() => {
+    let interval: any;
+    if (uploading) {
+      setUploadStep(1);
+      interval = setInterval(() => {
+        setUploadStep((prev) => (prev < 3 ? prev + 1 : prev));
+      }, 6000);
+    }
+    return () => clearInterval(interval);
+  }, [uploading]);
+
   const handleModalUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -70,14 +67,16 @@ export const DashboardPage: React.FC = () => {
       try {
         const res = await uploadReport(file);
         setUploading(false);
-        setUploadSuccessMsg(`Successfully uploaded & indexed "${res.fileName || res.filename}"!`);
+        setUploadSuccessMsg(`Successfully uploaded & vector indexed "${res.fileName || res.filename}"!`);
+        await fetchReports();
         setTimeout(() => {
           setUploadSuccessMsg(null);
           setUploadModalOpen(false);
-        }, 1800);
+        }, 1600);
       } catch (err: any) {
         setUploading(false);
-        setUploadError(err?.message || 'Failed to upload report PDF.');
+        await fetchReports();
+        setUploadError(err?.message || 'Failed to upload report PDF. Please try again.');
       }
     }
   };
@@ -198,7 +197,7 @@ export const DashboardPage: React.FC = () => {
         )}
       </div>
 
-      {/* Upload Modal */}
+      {/* Upload Modal with Rich Loading Animation */}
       {uploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-6 relative">
@@ -214,12 +213,14 @@ export const DashboardPage: React.FC = () => {
                   <p className="text-xs text-slate-500">PDF filing up to 25MB</p>
                 </div>
               </div>
-              <button
-                onClick={() => setUploadModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-sm font-bold p-1 cursor-pointer"
-              >
-                ✕
-              </button>
+              {!uploading && (
+                <button
+                  onClick={() => setUploadModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-sm font-bold p-1 cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
             {uploadError && (
@@ -238,11 +239,29 @@ export const DashboardPage: React.FC = () => {
 
             <div className="p-8 border-2 border-dashed border-slate-300 dark:border-slate-800 rounded-2xl text-center space-y-4 bg-slate-50/50 dark:bg-slate-950/50">
               {uploading ? (
-                <div className="py-6 space-y-3">
-                  <div className="w-10 h-10 border-3 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                    Extracting pages & generating ChromaDB vectors...
-                  </p>
+                <div className="py-8 space-y-5">
+                  <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin" />
+                    <Loader2 className="w-7 h-7 text-emerald-500 animate-spin" />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Processing & Embedding Financial PDF...
+                    </h4>
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold animate-pulse">
+                      {uploadStep === 1 && '• Step 1: Extracting page text & financial statements via PyMuPDF...'}
+                      {uploadStep === 2 && '• Step 2: Semantic chunking & generating SentenceTransformers embeddings...'}
+                      {uploadStep === 3 && '• Step 3: Indexing vector chunks into ChromaDB persistent store...'}
+                    </p>
+                  </div>
+
+                  <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full transition-all duration-1000 rounded-full"
+                      style={{ width: uploadStep === 1 ? '35%' : uploadStep === 2 ? '70%' : '95%' }}
+                    />
+                  </div>
                 </div>
               ) : (
                 <>
@@ -270,14 +289,16 @@ export const DashboardPage: React.FC = () => {
               )}
             </div>
 
-            <div className="flex justify-end">
-              <button
-                onClick={() => setUploadModalOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
+            {!uploading && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setUploadModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -7,7 +7,7 @@ const apiClient: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 60000, // 60s timeout for RAG processing
+  timeout: 180000, // 3 min timeout for RAG processing & vector embeddings
 });
 
 // Request Interceptor: Attach Firebase Bearer Token

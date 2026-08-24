@@ -45,8 +45,12 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const newReport = await documentService.uploadDocument(file);
       setReports((prev) => [newReport, ...prev.filter((r) => r.id !== newReport.id)]);
       setActiveReport(newReport);
+      // Auto-refresh reports list from server to ensure state is synchronized
+      await fetchReports();
       return newReport;
     } catch (err: any) {
+      // Auto-refresh even on error in case server completed processing
+      await fetchReports();
       const msg = err?.response?.data?.detail || err?.message || 'Failed to upload PDF report';
       setError(msg);
       throw new Error(msg);
