@@ -5,6 +5,7 @@ import { useReportContext } from '../context/ReportContext';
 import { StatCard } from '../components/StatCard';
 import { ReportCard } from '../components/ReportCard';
 import { EmptyState } from '../components/EmptyState';
+import { toTitleCase } from '../utils/formatters';
 import {
   FileText,
   CheckCircle2,
@@ -30,6 +31,9 @@ export const DashboardPage: React.FC = () => {
   const [uploadStep, setUploadStep] = useState(1);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
+
+  const rawName = user?.displayName || user?.email?.split('@')[0] || 'Analyst';
+  const userName = toTitleCase(rawName);
 
   const filteredReports = reports.filter((r) => {
     const type = r.filingType || '10-K';
@@ -67,7 +71,7 @@ export const DashboardPage: React.FC = () => {
       try {
         const res = await uploadReport(file);
         setUploading(false);
-        setUploadSuccessMsg(`Successfully uploaded & vector indexed "${res.fileName || res.filename}"!`);
+        setUploadSuccessMsg(`Successfully uploaded & indexed "${res.fileName || res.filename}"!`);
         await fetchReports();
         setTimeout(() => {
           setUploadSuccessMsg(null);
@@ -91,10 +95,10 @@ export const DashboardPage: React.FC = () => {
             <span>AI Document Intelligence Active</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight truncate">
-            Welcome back, {user?.displayName || user?.email?.split('@')[0] || 'Analyst'}
+            Welcome back, {userName}
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-            Upload financial report PDFs for automated PyMuPDF page extraction, vector indexing in ChromaDB, and instant AI financial Q&A.
+            Upload corporate filings, 10-Ks, or earnings reports to extract key metrics, compare quarters, and chat with your AI analyst.
           </p>
         </div>
 
@@ -104,7 +108,7 @@ export const DashboardPage: React.FC = () => {
             className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all transform hover:-translate-y-0.5 active:translate-y-0 flex items-center gap-2 cursor-pointer"
           >
             <UploadCloud className="w-4 h-4" />
-            <span>Upload PDF Filing</span>
+            <span>Upload Filing</span>
           </button>
           <Link
             to="/analyst"
@@ -116,7 +120,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Real Key Metrics Grid */}
+      {/* Productized Key Metrics Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <StatCard
           title="Total Reports"
@@ -126,23 +130,23 @@ export const DashboardPage: React.FC = () => {
           color="emerald"
         />
         <StatCard
-          title="Reports Processed"
+          title="Processed Reports"
           value={reports.filter((r) => r.status === 'completed' || r.status === 'ready' || r.status === 'uploaded').length.toString()}
-          subtitle="100% Vector Indexed"
+          subtitle="100% Fully Indexed"
           icon={CheckCircle2}
           color="blue"
         />
         <StatCard
-          title="Total Pages Indexed"
+          title="Pages Analyzed"
           value={totalPagesCount.toString()}
-          subtitle="PyMuPDF Extracted"
+          subtitle="Automated Text & Table Extraction"
           icon={BookOpen}
           color="indigo"
         />
         <StatCard
-          title="Vector Engine"
-          value="ChromaDB"
-          subtitle="Cosine Similarity Active"
+          title="AI Index Status"
+          value="Active"
+          subtitle={reports.length > 0 ? "Workspace Index Ready" : "Indexed Storage: 0 MB / 500 MB"}
           icon={Zap}
           color="violet"
         />
@@ -156,7 +160,7 @@ export const DashboardPage: React.FC = () => {
               Uploaded Financial Reports
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Access your real uploaded financial documents
+              Access your corporate filings and financial documents
             </p>
           </div>
 
@@ -189,7 +193,7 @@ export const DashboardPage: React.FC = () => {
         ) : (
           <EmptyState
             title="No Financial Reports Uploaded Yet"
-            description="Upload your first corporate 10-K, 10-Q, or earnings report PDF to extract financial insights and perform vector Q&A."
+            description="Upload your first corporate 10-K, 10-Q, or earnings report PDF to extract financial insights and perform Q&A with your AI analyst."
             actionLabel="Upload PDF Filing"
             onAction={() => setUploadModalOpen(true)}
             icon={UploadCloud}
@@ -197,7 +201,7 @@ export const DashboardPage: React.FC = () => {
         )}
       </div>
 
-      {/* Upload Modal with Rich Loading Animation */}
+      {/* Upload Modal with Productized Progress Steps */}
       {uploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-6 relative">
@@ -247,12 +251,12 @@ export const DashboardPage: React.FC = () => {
 
                   <div className="space-y-1.5">
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      Processing & Embedding Financial PDF...
+                      Processing & Analyzing PDF Filing...
                     </h4>
                     <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold animate-pulse">
-                      {uploadStep === 1 && '• Step 1: Extracting page text & financial statements via PyMuPDF...'}
-                      {uploadStep === 2 && '• Step 2: Semantic chunking & generating SentenceTransformers embeddings...'}
-                      {uploadStep === 3 && '• Step 3: Indexing vector chunks into ChromaDB persistent store...'}
+                      {uploadStep === 1 && '• Step 1: Deep document parsing & extracting financial tables...'}
+                      {uploadStep === 2 && '• Step 2: Section chunking & generating semantic index...'}
+                      {uploadStep === 3 && '• Step 3: Storing workspace intelligence index...'}
                     </p>
                   </div>
 
@@ -273,7 +277,7 @@ export const DashboardPage: React.FC = () => {
                       Select your financial report PDF
                     </p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Extracts tables, footnote details, and 1-indexed citations
+                      Extracts tables, footnote details, and page citations
                     </p>
                   </div>
                   <label className="inline-block px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-md shadow-emerald-500/20">

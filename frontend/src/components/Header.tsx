@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { MOCK_NOTIFICATIONS, MockNotification } from '../utils/mockData';
+import { toTitleCase } from '../utils/formatters';
 import {
   Search,
   Bell,
@@ -37,7 +38,9 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar, onSearchC
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdowns on outside click
+  const rawName = user?.displayName || user?.email?.split('@')[0] || 'Analyst';
+  const userName = toTitleCase(rawName);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
@@ -76,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar, onSearchC
   return (
     <header className="sticky top-0 z-40 w-full h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 transition-colors duration-200">
       <div className="h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
-        {/* Left: Mobile Toggle & Brand (on mobile) / Search bar */}
+        {/* Left: Mobile Toggle & Search bar */}
         <div className="flex items-center gap-3 flex-1 max-w-xl">
           <button
             onClick={onToggleMobileSidebar}
@@ -192,14 +195,14 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar, onSearchC
             >
               <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-xs font-bold text-white shadow-sm overflow-hidden flex-shrink-0">
                 {user?.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName || 'Avatar'} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <img src={user.photoURL} alt={userName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                 ) : (
-                  <span>{user?.displayName ? user.displayName[0].toUpperCase() : 'A'}</span>
+                  <span>{userName ? userName[0].toUpperCase() : 'A'}</span>
                 )}
               </div>
               <div className="hidden md:flex flex-col text-left">
                 <span className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-tight">
-                  {user?.displayName || 'Analyst'}
+                  {userName}
                 </span>
                 <span className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
                   {user?.email || 'analyst@finsight.ai'}
@@ -210,7 +213,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar, onSearchC
             {profileMenuOpen && (
               <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl z-50 p-1.5 text-xs animate-fade-in-down">
                 <div className="p-2 border-b border-slate-100 dark:border-slate-800 md:hidden">
-                  <div className="font-bold text-slate-900 dark:text-slate-100">{user?.displayName || 'Analyst'}</div>
+                  <div className="font-bold text-slate-900 dark:text-slate-100">{userName}</div>
                   <div className="text-slate-500 dark:text-slate-400 text-[10px] truncate">{user?.email || 'analyst@finsight.ai'}</div>
                 </div>
 

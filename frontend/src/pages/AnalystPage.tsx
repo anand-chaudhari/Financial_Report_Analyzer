@@ -181,7 +181,7 @@ export const AnalystPage: React.FC = () => {
         text: m.text,
       }));
 
-      // Live POST /api/chat call saving user question & AI response to Firestore
+      // Live POST /api/chat call saving user question & AI response
       const resData = await chatService.sendChat({
         conversation_id: activeConversationId || undefined,
         document_id: selectedReportId || activeReport?.id || activeReport?.documentId || 'doc_unknown',
@@ -369,7 +369,7 @@ export const AnalystPage: React.FC = () => {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500 text-[11px]">Vector Status:</span>
+                <span className="text-slate-500 text-[11px]">Analysis Status:</span>
                 <span className="font-bold text-emerald-500 text-[10px] uppercase">100% Indexed</span>
               </div>
             </div>
@@ -382,7 +382,7 @@ export const AnalystPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-emerald-500" />
               <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
-                Firestore History
+                Analyst History
               </h3>
             </div>
             <button
@@ -480,7 +480,7 @@ export const AnalystPage: React.FC = () => {
                 AI Financial Analyst
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                {activeConversationId ? 'Continuing persistent conversation' : 'New Q&A Thread'} • POST /api/chat
+                {activeConversationId ? 'Continuing analysis thread' : 'New Analysis Thread'} • Grounded Q&A
               </p>
             </div>
           </div>
@@ -605,7 +605,7 @@ export const AnalystPage: React.FC = () => {
                 Start AI Financial Analysis
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                Ask any question about your selected financial report. Questions, answers, and sources will be saved to your Firestore account history.
+                Ask any question about your selected financial report. Questions, answers, and citations are saved to your analyst workspace.
               </p>
             </div>
           )}
@@ -623,7 +623,7 @@ export const AnalystPage: React.FC = () => {
                   <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Querying POST /api/chat with Groq LLM & saving to Firestore...
+                  Analyzing report context & generating answer...
                 </span>
               </div>
             </div>
@@ -679,7 +679,7 @@ export const AnalystPage: React.FC = () => {
             <span className="flex items-center gap-1">
               <CornerDownLeft className="w-3 h-3" /> Press Enter to send, Shift+Enter for new line
             </span>
-            <span>Firestore History Active • Groq Llama-3.3 70B & ChromaDB</span>
+            <span>Grounded AI Intelligence • Verified Page Citations</span>
           </div>
         </div>
       </div>

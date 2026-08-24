@@ -69,8 +69,8 @@ export const StatCard: React.FC<StatCardProps> = ({
 
   return (
     <div className="relative p-5 sm:p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-200 flex flex-col justify-between group min-w-0">
-      <div className="flex items-center justify-between gap-2 min-w-0">
-        <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 tracking-wider uppercase truncate">
+      <div className="flex items-start justify-between gap-3 min-w-0">
+        <span className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 tracking-wider uppercase leading-snug whitespace-normal break-words">
           {title}
         </span>
         <div
@@ -82,7 +82,7 @@ export const StatCard: React.FC<StatCardProps> = ({
 
       <div className="mt-3 space-y-1 min-w-0">
         <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
-          <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight truncate">
+          <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight break-words">
             {value}
           </span>
           {change && (
@@ -104,7 +104,7 @@ export const StatCard: React.FC<StatCardProps> = ({
         </div>
 
         {subText && (
-          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium truncate">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium leading-normal whitespace-normal break-words">
             {subText}
           </p>
         )}

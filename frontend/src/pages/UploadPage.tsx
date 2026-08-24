@@ -109,12 +109,12 @@ export const UploadPage: React.FC = () => {
 
             <div className="space-y-1.5 max-w-md mx-auto">
               <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                Processing & Embedding PDF Filing...
+                Processing & Analyzing PDF Filing...
               </h3>
               <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold animate-pulse">
-                {uploadStep === 1 && '• Step 1: Extracting page text & financial statements via PyMuPDF...'}
-                {uploadStep === 2 && '• Step 2: Semantic chunking & generating SentenceTransformers embeddings...'}
-                {uploadStep === 3 && '• Step 3: Indexing vector chunks into ChromaDB persistent store...'}
+                {uploadStep === 1 && '• Step 1: Deep document parsing & extracting financial tables...'}
+                {uploadStep === 2 && '• Step 2: Section chunking & generating semantic index...'}
+                {uploadStep === 3 && '• Step 3: Storing workspace intelligence index...'}
               </p>
             </div>
 
@@ -164,7 +164,7 @@ export const UploadPage: React.FC = () => {
                 Drag and drop your PDF report here
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Supports PDF up to 25MB with page-by-page extraction
+                Supports PDF up to 25MB with automated page extraction
               </p>
             </div>
 

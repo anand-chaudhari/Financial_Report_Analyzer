@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavLink, Link } from 'react-router-dom';
+import { useReportContext } from '../context/ReportContext';
 import {
   LayoutDashboard,
   FileText,
@@ -19,9 +20,17 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) => {
+  const { reports } = useReportContext();
+  const reportsCount = reports.length;
+
   const mainNav = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/reports', label: 'My Reports', icon: FileText, badge: '18' },
+    {
+      to: '/reports',
+      label: 'My Reports',
+      icon: FileText,
+      badge: reportsCount > 0 ? String(reportsCount) : undefined,
+    },
     { to: '/upload', label: 'Upload Report', icon: UploadCloud },
     { to: '/analyst', label: 'AI Analyst', icon: Bot, isNew: true },
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
@@ -45,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
                 </span>
               </div>
               <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
-                Financial RAG Intelligence
+                Financial Report Intelligence
               </span>
             </div>
           </Link>
@@ -54,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
           {onCloseMobile && (
             <button
               onClick={onCloseMobile}
-              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 md:hidden"
+              className="p-1.5 rounded-lg text-slate-505 hover:bg-slate-100 dark:hover:bg-slate-800 md:hidden"
             >
               <X className="w-4 h-4" />
             </button>
@@ -115,11 +124,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
             </span>
             <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Online
+              Active
             </span>
           </div>
           <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-            Retrieval & Citation Engine Ready
+            Financial Document Intelligence Active
           </p>
         </div>
       </div>

@@ -29,3 +29,13 @@ export const formatCurrency = (amount: number, currency = 'USD'): string => {
     maximumFractionDigits: 1,
   }).format(amount);
 };
+
+export const toTitleCase = (str?: string | null): string => {
+  if (!str || !str.trim()) return 'Analyst';
+  return str
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
