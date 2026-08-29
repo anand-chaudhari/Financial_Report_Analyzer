@@ -10,6 +10,7 @@ class Citation(BaseModel):
     similarity_score: Optional[float] = None
     section: Optional[str] = None
     document_name: Optional[str] = None
+    is_verified: bool = True
 
 
 class ChatMessageItem(BaseModel):

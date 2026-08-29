@@ -3,6 +3,9 @@ export interface Citation {
   snippet: string;
   chunk_id?: string;
   similarity_score?: number;
+  section?: string;
+  document_name?: string;
+  is_verified?: boolean;
 }
 
 export interface ChatMessage {

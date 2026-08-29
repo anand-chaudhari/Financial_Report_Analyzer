@@ -18,14 +18,15 @@ export const renderInlineMarkdown = (
 ): React.ReactNode => {
   if (!text) return null;
 
-  // Sanitize internal debugging tokens
-  const cleanText = text
-    .replace(/svgPage\s*\d+/gi, '')
-    .replace(/Evidence\s*\d+\s*[:\-]/gi, '')
+  // Sanitize internal debugging tokens and transform them into clean Source citations
+  let cleanText = text
+    .replace(/Evidence\s*\d+\s*(?:\/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)/gi, 'Source: Page $1')
+    .replace(/svgPage\s*(\d+)/gi, 'Page $1')
+    .replace(/\[Evidence\s*\d+\]/gi, '')
     .trim();
 
-  // Pattern matches: [Page X], (Page X), 【Page X】, Page X — Section, **bold**, *italic*, `code`
-  const tokenRegex = /(\[(?:Page\s*)?\d+(?:\s*—[^\]]+)?\]|\(Page\s*\d+\)|【Page\s*\d+】|Page\s*\d+\s*—\s*[A-Za-z0-9\s,\.\-&]+|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+  // Pattern matches: Source: Page X — Section, [Page X — Section], [Page X], (Page X), 【Page X】, Page X — Section, **bold**, *italic*, `code`
+  const tokenRegex = /(Source:\s*Page\s*\d+(?:\s*—[A-Za-z0-9\s,\.\-&]+)?|\[(?:Page\s*)?\d+(?:\s*—[^\]]+)?\]|\(Page\s*\d+\)|【Page\s*\d+】|Page\s*\d+\s*—\s*[A-Za-z0-9\s,\.\-&]+|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -62,29 +63,38 @@ export const renderInlineMarkdown = (
         </code>
       );
     }
-    // D. Citation reference (e.g. [Page 291], Page 291 — Balance Sheet)
+    // D. Citation reference (e.g. Source: Page 291 — Consolidated Statement of Profit and Loss, [Page 291])
     else {
       const pageMatch = matchedStr.match(/Page\s*(\d+)/i);
       const pageNum = pageMatch ? parseInt(pageMatch[1], 10) : null;
 
       if (pageNum) {
+        let sectionName = 'Financial Statement';
+        if (matchedStr.includes('—')) {
+          sectionName = matchedStr.split('—')[1].replace(/[\]\)]/g, '').trim();
+        }
+
         const matchedSource = sources?.find((s) => s.page_number === pageNum) || {
           page_number: pageNum,
-          section: matchedStr.includes('—') ? matchedStr.split('—')[1].replace(/[\]\)]/g, '').trim() : 'Financial Filing Reference',
+          section: sectionName,
           document_name: 'Financial Filing',
-          snippet: `Referenced statement snippet on Page ${pageNum}.`,
+          snippet: `Referenced financial disclosure on Page ${pageNum}.`,
         };
+
+        const displayLabel = sectionName && sectionName !== 'Financial Statement' && sectionName.length < 35
+          ? `Source: Page ${pageNum} — ${sectionName}`
+          : `Source: Page ${pageNum}`;
 
         parts.push(
           <button
             key={`badge_${index}`}
             type="button"
             onClick={() => onOpenSourceModal?.(matchedSource)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 mx-1 my-0.5 rounded-md bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 font-extrabold text-[11px] transition-all cursor-pointer shadow-xs group align-middle"
-            title={`View citation for Page ${pageNum}`}
+            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 mx-1 my-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 font-extrabold text-[11px] transition-all cursor-pointer shadow-xs group align-middle"
+            title={`View verified citation for Page ${pageNum}: ${sectionName}`}
           >
-            <ShieldCheck className="w-3 h-3 text-emerald-500 group-hover:scale-110 transition-transform" />
-            <span>Page {pageNum}</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 group-hover:scale-110 transition-transform" />
+            <span className="truncate max-w-[280px]">{displayLabel}</span>
           </button>
         );
       } else {

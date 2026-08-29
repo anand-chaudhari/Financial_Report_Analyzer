@@ -275,38 +275,56 @@ class RAGService:
             pdf_path=pdf_path,
         )
 
-        # 8. Validate Citations: Only cite pages that actually support or appear in the answer
+        # Post-process answer to replace any residual internal tokens:
+        # e.g. "Evidence 7 / svgPage 291" -> "Source: Page 291 — Financial Statement"
+        clean_answer = raw_answer
+        clean_answer = re.sub(r"Evidence\s*\d+\s*(?:/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)", r"Source: Page \1", clean_answer, flags=re.IGNORECASE)
+        clean_answer = re.sub(r"svgPage\s*(\d+)", r"Page \1", clean_answer, flags=re.IGNORECASE)
+        clean_answer = re.sub(r"\[Evidence\s*\d+\]", "", clean_answer, flags=re.IGNORECASE)
+
+        # 8. Evidence-Based Citation Verification: Only cite pages that actually support the answer
         is_fallback_or_error = any(
-            phrase in raw_answer.lower()
-            for phrase in ("could not find enough information", "not found", "temporarily busy", "rate limit", "not explicitly disclosed")
+            phrase in clean_answer.lower()
+            for phrase in ("could not find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
         )
 
         valid_pages: List[int] = []
         valid_sources: List[str] = []
+        verified_sections: List[str] = []
+        verified_chunks: List[Dict[str, Any]] = []
 
         if not is_fallback_or_error:
             # Extract explicitly cited page numbers from the generated response
             cited_pages = set()
-            for p_match in re.finditer(r"(?:Page|Pages|p\.)\s*(\d+)", raw_answer, re.IGNORECASE):
+            for p_match in re.finditer(r"(?:Page|p\.)\s*(\d+)", clean_answer, re.IGNORECASE):
                 try:
-                    cited_pages.add(int(p_match.group(1)))
+                    p_val = int(p_match.group(1))
+                    if p_val in page_set:
+                        cited_pages.add(p_val)
                 except ValueError:
                     pass
 
             if cited_pages:
                 valid_pages = sorted(list(cited_pages))
             else:
-                # Top 2 most relevant retrieved chunks
+                # If LLM cited no explicit pages, use top chunks with highest relevance score
                 valid_pages = sorted_pages[:2]
 
-            valid_sources = [f"Page {p}" for p in valid_pages]
+            for p in valid_pages:
+                # Find matching chunk to extract exact section name
+                matching_chunk = next((c for c in unique_chunks if c.get("page_number") == p), None)
+                sec_name = matching_chunk.get("section", "Financial Statement") if matching_chunk else "Financial Statement"
+                valid_sources.append(f"Source: Page {p} — {sec_name}")
+                verified_sections.append(sec_name)
+                if matching_chunk:
+                    verified_chunks.append(matching_chunk)
 
-        logger.info(f"RAG Generated Answer: {len(raw_answer)} chars | Verified Cited Pages: {valid_pages}")
+        logger.info(f"RAG Generated Answer: {len(clean_answer)} chars | Verified Cited Pages: {valid_pages}")
 
         return {
-            "answer": raw_answer,
+            "answer": clean_answer,
             "sources": valid_sources,
             "pages": valid_pages,
-            "sections": sorted_sections[:len(valid_pages)],
-            "retrieved_chunks": unique_chunks,
+            "sections": verified_sections,
+            "retrieved_chunks": verified_chunks if verified_chunks else unique_chunks,
         }
