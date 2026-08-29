@@ -11,6 +11,7 @@ import {
   Settings,
   Sparkles,
   TrendingUp,
+  Scale,
   X,
 } from 'lucide-react';
 
