@@ -25,6 +25,7 @@ import {
   BarChart3,
   Scale,
   Briefcase,
+  RefreshCw,
 } from 'lucide-react';
 
 export const ReportSummaryPage: React.FC = () => {
@@ -189,6 +190,16 @@ ${summaryData.future_plans.text}
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={fetchSummary}
+            disabled={loading}
+            className="px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+            title="Re-analyze document and regenerate summary"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span>{loading ? 'Analyzing...' : 'Regenerate'}</span>
+          </button>
+
           <button
             onClick={handleCopySummary}
             disabled={!summaryData || loading}

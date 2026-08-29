@@ -320,6 +320,8 @@ class GeminiLLMClient:
                 self.content = text
         return _Resp(self.generate(prompt))
 
+    generate_response = generate
+
 
 # Backward-compatibility aliases - all existing imports keep working
 GroqLLMClient = GeminiLLMClient
