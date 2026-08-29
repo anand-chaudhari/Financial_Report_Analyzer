@@ -2,7 +2,13 @@
  * FinSight AI - Institutional Export Suite.
  * Generates Excel financial models, CFO PDF briefings, and board presentation decks.
  */
-import { FinancialAnalyticsResponse, SourceMetadata } from '../types/financial';
+import {
+  FinancialAnalyticsResponse,
+  SourceMetadata,
+  MetricDataPoint,
+  AssetsLiabilitiesPoint,
+  KeyRatio,
+} from '../types/financial';
 
 export interface ExportDataPayload {
   companyName: string;
@@ -27,15 +33,15 @@ export const exportToExcel = (payload: ExportDataPayload) => {
   rows.push(['--- REVENUE & PROFITABILITY SCHEDULE ---']);
   rows.push(['Period', 'Metric', 'Value', 'Unit', 'Source Page']);
 
-  analytics?.revenue_chart?.forEach((item) => {
+  analytics?.revenue_chart?.forEach((item: MetricDataPoint) => {
     rows.push([item.period, 'Revenue from Operations', String(item.value), item.unit, `Page ${item.page_number}`]);
   });
 
-  analytics?.profit_chart?.forEach((item) => {
+  analytics?.profit_chart?.forEach((item: MetricDataPoint) => {
     rows.push([item.period, 'Net Profit (PAT)', String(item.value), item.unit, `Page ${item.page_number}`]);
   });
 
-  analytics?.expense_chart?.forEach((item) => {
+  analytics?.expense_chart?.forEach((item: MetricDataPoint) => {
     rows.push([item.period, 'Total Operating Expenses', String(item.value), item.unit, `Page ${item.page_number}`]);
   });
 
@@ -43,7 +49,7 @@ export const exportToExcel = (payload: ExportDataPayload) => {
   rows.push(['--- BALANCE SHEET METRICS ---']);
   rows.push(['Period', 'Total Assets', 'Total Liabilities', 'Unit', 'Source Page']);
 
-  analytics?.assets_vs_liabilities_chart?.forEach((item) => {
+  analytics?.assets_vs_liabilities_chart?.forEach((item: AssetsLiabilitiesPoint) => {
     rows.push([
       item.period,
       String(item.assets),
@@ -57,8 +63,8 @@ export const exportToExcel = (payload: ExportDataPayload) => {
   rows.push(['--- KEY FINANCIAL RATIOS ---']);
   rows.push(['Ratio Name', 'Calculated Value', 'Description', 'Source Page']);
 
-  analytics?.key_ratios?.forEach((item) => {
-    rows.push([item.name, item.value, item.description, `Page ${item.page_number}`]);
+  analytics?.key_ratios?.forEach((item: KeyRatio) => {
+    rows.push([item.name, item.value, item.description || '', `Page ${item.page_number}`]);
   });
 
   // Convert to CSV
@@ -137,7 +143,7 @@ export const exportToPdfBrief = (payload: ExportDataPayload) => {
       </thead>
       <tbody>
         ${(analytics?.revenue_chart || [])
-          .map((rev, idx) => {
+          .map((rev: MetricDataPoint, idx: number) => {
             const prof = analytics?.profit_chart?.[idx]?.value || '-';
             const exp = analytics?.expense_chart?.[idx]?.value || '-';
             return `
@@ -213,7 +219,7 @@ export const exportToPresentationDeck = (payload: ExportDataPayload) => {
       subtitle: 'Multi-Period Performance',
       bullets:
         analytics?.revenue_chart?.map(
-          (r) => `Period ${r.period}: Revenue ${r.value.toLocaleString()} ${r.unit} (Page ${r.page_number})`
+          (r: MetricDataPoint) => `Period ${r.period}: Revenue ${r.value.toLocaleString()} ${r.unit} (Page ${r.page_number})`
         ) || ['Performance metrics verified across filing tables.'],
     },
     {
@@ -222,7 +228,7 @@ export const exportToPresentationDeck = (payload: ExportDataPayload) => {
       subtitle: 'Solvency & Leverage Assessment',
       bullets:
         analytics?.assets_vs_liabilities_chart?.map(
-          (b) => `Period ${b.period}: Assets ${b.assets.toLocaleString()} vs Liabilities ${b.liabilities.toLocaleString()} ${b.unit}`
+          (b: AssetsLiabilitiesPoint) => `Period ${b.period}: Assets ${b.assets.toLocaleString()} vs Liabilities ${b.liabilities.toLocaleString()} ${b.unit}`
         ) || ['Assets, liabilities, and debt schedules parsed.'],
     },
     {

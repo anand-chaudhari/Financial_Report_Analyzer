@@ -586,10 +586,10 @@ export const AnalyticsPage: React.FC = () => {
               <BarChart
                 data={[
                   { step: 'Gross Revenue', value: revData[revData.length - 1]?.value || 100000, fill: '#10b981' },
-                  { step: 'Direct Delivery', value: (expData[expData.length - 1]?.value || 70000) * 0.65, fill: '#ef4444' },
-                  { step: 'Operating SG&A', value: (expData[expData.length - 1]?.value || 70000) * 0.35, fill: '#f59e0b' },
-                  { step: 'Operating Profit', value: Math.max(0, (revData[revData.length - 1]?.value || 100000) - (expData[expData.length - 1]?.value || 70000)), fill: '#3b82f6' },
-                  { step: 'Net Profit (PAT)', value: profData[profData.length - 1]?.value || 25000, fill: '#8b5cf6' },
+                  { step: 'Direct Delivery', value: (expenseData[expenseData.length - 1]?.value || 70000) * 0.65, fill: '#ef4444' },
+                  { step: 'Operating SG&A', value: (expenseData[expenseData.length - 1]?.value || 70000) * 0.35, fill: '#f59e0b' },
+                  { step: 'Operating Profit', value: Math.max(0, (revData[revData.length - 1]?.value || 100000) - (expenseData[expenseData.length - 1]?.value || 70000)), fill: '#3b82f6' },
+                  { step: 'Net Profit (PAT)', value: profitData[profitData.length - 1]?.value || 25000, fill: '#8b5cf6' },
                 ]}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.4} />

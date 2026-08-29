@@ -22,6 +22,7 @@ import {
   Legend,
   CartesianGrid,
 } from 'recharts';
+import { RichMarkdownRenderer } from '../components/common/RichMarkdownRenderer';
 
 interface ComparisonData {
   document_a: {
@@ -296,8 +297,8 @@ export const ComparePage: React.FC = () => {
             </h3>
           </div>
 
-          <div className="prose dark:prose-invert max-w-none text-xs sm:text-sm leading-relaxed whitespace-pre-wrap text-slate-700 dark:text-slate-300">
-            {comparisonData.comparative_summary}
+          <div className="p-6 sm:p-7 rounded-2xl bg-slate-50/70 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800/80">
+            <RichMarkdownRenderer content={comparisonData.comparative_summary} />
           </div>
 
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">

@@ -68,3 +68,13 @@ export interface FinancialChartData {
   key_ratios?: KeyRatio[];
   extracted_at?: string;
 }
+
+export interface SourceMetadata {
+  page_number: number;
+  section: string;
+  document_name?: string;
+  snippet?: string;
+  confidence?: number;
+}
+
+export type FinancialAnalyticsResponse = FinancialChartData;
