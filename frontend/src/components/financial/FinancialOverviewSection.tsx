@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { financialService } from '../../services/financialService';
 import { FinancialOverviewData, OverviewMetricItem } from '../../types/financial';
+import { FinancialKpiGrid } from './FinancialKpiGrid';
 
 interface FinancialOverviewSectionProps {
   reportId: string;
@@ -138,6 +139,9 @@ export const FinancialOverviewSection: React.FC<FinancialOverviewSectionProps> =
           {data.executive_overview}
         </div>
       )}
+
+      {/* Feature 3: Financial KPI Dashboard Cards Grid */}
+      <FinancialKpiGrid data={data} onOpenCitation={onOpenCitation} />
 
       {/* Comparative Multi-Period Financial Table */}
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
