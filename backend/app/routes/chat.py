@@ -11,6 +11,9 @@ from ..schemas.chat_schema import (
     ChatHistoryResponse,
 )
 from ..schemas.common_schema import ApiResponse
+from ..utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 router = APIRouter(prefix="", tags=["Chat & RAG Q&A"])
 chat_service = ChatService()

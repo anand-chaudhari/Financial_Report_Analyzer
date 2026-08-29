@@ -321,8 +321,6 @@ class ChatService:
             user_id=user_id,
             role="assistant",
             content=answer,
-            pages=page_list or [],
-            sections=section_list or [],
             sources=structured_sources or []
         )
 
