@@ -59,23 +59,32 @@ class SummaryService:
         retrieved_chunks = []
         retrieved_pages = set()
         chunk_texts_combined = []
+        seen_texts = set()
 
         for q in search_queries:
             results = self.vector_service.search(
-                query=q,
+                query_text=q,
                 user_id=user_id,
                 document_id=document_id,
-                top_k=4
+                top_k=3
             )
             for item in results:
-                pg = item.metadata.get("page_number") or item.metadata.get("page") or 1
+                txt = item.get("text", "")
+                if not txt or txt in seen_texts:
+                    continue
+                seen_texts.add(txt)
+                pg = item.get("page_number") or (item.get("metadata", {}).get("page_number") if isinstance(item.get("metadata"), dict) else 1) or 1
+                try:
+                    pg = int(pg)
+                except (ValueError, TypeError):
+                    pg = 1
                 retrieved_pages.add(pg)
                 retrieved_chunks.append({
-                    "text": item.chunk_text,
+                    "text": txt,
                     "page_number": pg,
-                    "section": item.metadata.get("section") or "Report Section"
+                    "section": item.get("section") or "Report Section"
                 })
-                chunk_texts_combined.append(f"[Page {pg}]: {item.chunk_text[:500]}")
+                chunk_texts_combined.append(f"[Page {pg}]: {txt[:1200]}")
 
         context_str = "\n\n".join(chunk_texts_combined[:25])
 

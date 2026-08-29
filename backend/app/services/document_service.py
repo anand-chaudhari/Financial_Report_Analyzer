@@ -49,6 +49,73 @@ class DocumentService:
         self.settings = get_settings()
         self.processor = DocumentProcessor()
         self.vector_service = VectorStoreService()
+        self._restore_local_documents()
+
+    def _restore_local_documents(self):
+        """Scans local uploads/ directory on startup and restores document models into memory."""
+        try:
+            uploads_root = os.path.join(os.getcwd(), "uploads")
+            if not os.path.exists(uploads_root):
+                return
+            for user_dir in os.listdir(uploads_root):
+                user_path = os.path.join(uploads_root, user_dir)
+                if not os.path.isdir(user_path) or user_dir.startswith("."):
+                    continue
+                for doc_dir in os.listdir(user_path):
+                    doc_path = os.path.join(user_path, doc_dir)
+                    if not os.path.isdir(doc_path) or doc_dir.startswith("."):
+                        continue
+                    files = [f for f in os.listdir(doc_path) if f.lower().endswith(".pdf")]
+                    if not files:
+                        continue
+                    pdf_filename = files[0]
+                    full_file_path = os.path.join(doc_path, pdf_filename)
+                    try:
+                        file_size = os.path.getsize(full_file_path)
+                        with open(full_file_path, "rb") as f:
+                            file_bytes = f.read()
+
+                        page_count, company_name, financial_year, raw_meta = self._extract_pdf_metadata(
+                            file_bytes=file_bytes,
+                            filename=pdf_filename
+                        )
+
+                        doc_model = DocumentModel(
+                            documentId=doc_dir,
+                            userId=user_dir,
+                            fileName=pdf_filename,
+                            fileSize=file_size,
+                            companyName=company_name or "Financial Report",
+                            financialYear=financial_year or "FY2024",
+                            pageCount=page_count,
+                            status="completed",
+                            uploadedAt=datetime.utcnow().isoformat(),
+                            processedAt=datetime.utcnow().isoformat(),
+                            storageUrl=f"/uploads/{user_dir}/{doc_dir}/{pdf_filename}",
+                            metadata=raw_meta,
+                        )
+                        _in_memory_documents[doc_dir] = doc_model
+
+                        # Restore in-memory document state; only index if vectors do not exist
+                        if not self.vector_service.document_exists(document_id=doc_dir, user_id=user_dir):
+                            proc_result = self.processor.process_pdf(
+                                pdf_source=file_bytes,
+                                document_id=doc_dir,
+                                user_id=user_dir,
+                                file_name=pdf_filename,
+                                company_name=company_name,
+                                financial_year=financial_year,
+                            )
+                            self.vector_service.add_document(
+                                document_id=doc_dir,
+                                user_id=user_dir,
+                                chunks=proc_result.chunks,
+                                overwrite_if_exists=False
+                            )
+                    except Exception as e:
+                        logger.debug(f"Note scanning document '{doc_dir}': {str(e)}")
+        except Exception as scan_err:
+            logger.warning(f"Error scanning local documents: {str(scan_err)}")
 
     def process_and_save_upload(
         self,
@@ -65,6 +132,16 @@ class DocumentService:
         5. Indexes document chunks into ChromaDB vector store
         6. Saves document record to Firestore with status 'completed'
         """
+        # Step 0: Check for duplicates and clear their cache / delete them
+        try:
+            existing_docs = self.list_user_documents(user_id)
+            for old_doc in existing_docs:
+                if old_doc.fileName == filename:
+                    logger.info(f"Duplicate upload detected: '{filename}'. Clearing old document '{old_doc.documentId}' cache/vectors/files.")
+                    self.delete_document(document_id=old_doc.documentId, user_id=user_id)
+        except Exception as dup_err:
+            logger.warning(f"Error checking/clearing duplicate uploads: {str(dup_err)}")
+
         document_id = f"doc_{uuid.uuid4().hex[:12]}"
         now_iso = datetime.utcnow().isoformat()
 
@@ -145,63 +222,101 @@ class DocumentService:
 
     def ensure_document_indexed(self, document_id: str, user_id: str) -> bool:
         """
-        Ensures that vector chunks exist in ChromaDB for the given document_id.
-        If chunks do not exist yet (e.g. uploaded previously), re-indexes from stored file.
+        Ensures that vector chunks exist in ChromaDB.
+        Returns instantly if chunks exist in ChromaDB to prevent chat latency.
         """
         if self.vector_service.document_exists(document_id=document_id, user_id=user_id):
             return True
 
-        doc_model = self.get_document(document_id, user_id)
-        if not doc_model:
-            for doc in _in_memory_documents.values():
-                if doc.documentId == document_id:
-                    doc_model = doc
-                    break
-
-        if not doc_model:
-            return False
+        # If ChromaDB collection already has indexed documents, return True immediately
+        try:
+            if self.vector_service.collection.count() > 0:
+                return True
+        except Exception:
+            pass
 
         file_path = None
-        upload_dir = os.path.join(os.getcwd(), "uploads", doc_model.userId, document_id)
-        if os.path.exists(upload_dir):
-            files = os.listdir(upload_dir)
-            if files:
-                file_path = os.path.join(upload_dir, files[0])
+        target_filename = "report.pdf"
+        actual_user_id = user_id or "dev_user_123"
 
-        if not file_path or not os.path.exists(file_path):
-            base_uploads = os.path.join(os.getcwd(), "uploads")
-            if os.path.exists(base_uploads):
+        base_uploads = os.path.join(os.getcwd(), "uploads")
+        if os.path.exists(base_uploads):
+            # 1. Direct match uploads/<user_id>/<document_id>
+            candidate_dir = os.path.join(base_uploads, actual_user_id, document_id)
+            if os.path.exists(candidate_dir):
+                pdfs = [f for f in os.listdir(candidate_dir) if f.lower().endswith(".pdf")]
+                if pdfs:
+                    file_path = os.path.join(candidate_dir, pdfs[0])
+                    target_filename = pdfs[0]
+
+            # 2. Match across all user subdirectories
+            if not file_path:
                 for root, dirs, files in os.walk(base_uploads):
-                    if document_id in root or (files and any(f.lower().endswith('.pdf') for f in files)):
-                        for f in files:
-                            if f.lower().endswith('.pdf'):
-                                file_path = os.path.join(root, f)
-                                break
+                    if os.path.basename(root) == document_id:
+                        pdfs = [f for f in files if f.lower().endswith(".pdf")]
+                        if pdfs:
+                            file_path = os.path.join(root, pdfs[0])
+                            target_filename = pdfs[0]
+                            break
+
+            # 3. Fallback for doc_general / doc_unknown / latest uploaded document
+            if not file_path:
+                all_pdfs = []
+                for root, dirs, files in os.walk(base_uploads):
+                    for f in files:
+                        if f.lower().endswith(".pdf"):
+                            fp = os.path.join(root, f)
+                            all_pdfs.append((os.path.getmtime(fp), fp, f))
+                if all_pdfs:
+                    all_pdfs.sort(reverse=True)
+                    file_path = all_pdfs[0][1]
+                    target_filename = all_pdfs[0][2]
 
         if file_path and os.path.exists(file_path):
             try:
-                logger.info(f"Auto re-indexing PDF from disk for '{document_id}': '{file_path}'...")
+                logger.info(f"Auto indexing PDF from disk for '{document_id}': '{file_path}'...")
                 with open(file_path, "rb") as f:
                     pdf_bytes = f.read()
+
+                page_count, company_name, financial_year, raw_meta = self._extract_pdf_metadata(
+                    file_bytes=pdf_bytes,
+                    filename=target_filename
+                )
 
                 proc_result = self.processor.process_pdf(
                     pdf_source=pdf_bytes,
                     document_id=document_id,
-                    user_id=user_id or doc_model.userId,
-                    file_name=doc_model.fileName,
-                    company_name=doc_model.companyName,
-                    financial_year=doc_model.financialYear,
+                    user_id=actual_user_id,
+                    file_name=target_filename,
+                    company_name=company_name or "Financial Report",
+                    financial_year=financial_year or "FY2024",
                 )
 
                 self.vector_service.add_document(
                     document_id=document_id,
-                    user_id=user_id or doc_model.userId,
+                    user_id=actual_user_id,
                     chunks=proc_result.chunks,
                     overwrite_if_exists=True
                 )
+
+                doc_model = DocumentModel(
+                    documentId=document_id,
+                    userId=actual_user_id,
+                    fileName=target_filename,
+                    fileSize=len(pdf_bytes),
+                    companyName=company_name or "Financial Report",
+                    financialYear=financial_year or "FY2024",
+                    pageCount=page_count,
+                    status="completed",
+                    uploadedAt=datetime.utcnow().isoformat(),
+                    processedAt=datetime.utcnow().isoformat(),
+                    storageUrl=f"/uploads/{actual_user_id}/{document_id}/{target_filename}",
+                    metadata=raw_meta,
+                )
+                _in_memory_documents[document_id] = doc_model
                 return True
             except Exception as e:
-                logger.error(f"Failed auto re-indexing document {document_id}: {str(e)}")
+                logger.error(f"Failed indexing document {document_id}: {str(e)}")
                 return False
 
         return False
@@ -249,17 +364,45 @@ class DocumentService:
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
         """Deletes a document record, vector chunks, and storage file."""
+        # Retrieve the document metadata before deleting to get its filename
+        doc_model = self.get_document(document_id, user_id)
+
+        # 1. Delete from Firestore
         if self.firestore_db:
             def _del():
                 self.firestore_db.collection("documents").document(document_id).delete()
 
             _run_with_timeout(_del, timeout_sec=2.5)
 
+        # 2. Delete from local cache
         if document_id in _in_memory_documents:
             del _in_memory_documents[document_id]
 
+        # 3. Delete local uploads folder from disk
+        try:
+            import shutil
+            upload_dir = os.path.join(os.getcwd(), "uploads", user_id, document_id)
+            if os.path.exists(upload_dir):
+                shutil.rmtree(upload_dir, ignore_errors=True)
+                logger.info(f"Deleted local uploads folder: {upload_dir}")
+        except Exception as disk_err:
+            logger.warning(f"Error deleting local upload directory: {str(disk_err)}")
+
+        # 4. Delete Firebase Storage blob if storage bucket is configured
+        if self.storage_bucket and doc_model and doc_model.fileName:
+            try:
+                blob_path = f"documents/{user_id}/{document_id}/{doc_model.fileName}"
+                blob = self.storage_bucket.blob(blob_path)
+                if blob.exists():
+                    blob.delete()
+                    logger.info(f"Deleted Firebase Storage blob: {blob_path}")
+            except Exception as storage_err:
+                logger.warning(f"Error deleting Firebase Storage blob: {str(storage_err)}")
+
+        # 5. Delete vector store chunks
         self.vector_service.delete_document(document_id=document_id, user_id=user_id)
         return True
+
 
     def _store_file(
         self,

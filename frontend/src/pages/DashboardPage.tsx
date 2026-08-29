@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useReportContext } from '../context/ReportContext';
@@ -15,22 +15,15 @@ import {
   Sparkles,
   Search,
   BookOpen,
-  AlertCircle,
-  Loader2,
 } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { reports, uploadReport, deleteReport, fetchReports } = useReportContext();
+  const { reports, deleteReport } = useReportContext();
 
   const [selectedFilter, setSelectedFilter] = useState<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'>('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const [uploadModalOpen, setUploadModalOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadStep, setUploadStep] = useState(1);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
 
   const rawName = user?.displayName || user?.email?.split('@')[0] || 'Analyst';
   const userName = toTitleCase(rawName);
@@ -49,41 +42,6 @@ export const DashboardPage: React.FC = () => {
   });
 
   const totalPagesCount = reports.reduce((acc, r) => acc + (r.pageCount || r.total_pages || 0), 0);
-
-  useEffect(() => {
-    let interval: any;
-    if (uploading) {
-      setUploadStep(1);
-      interval = setInterval(() => {
-        setUploadStep((prev) => (prev < 3 ? prev + 1 : prev));
-      }, 6000);
-    }
-    return () => clearInterval(interval);
-  }, [uploading]);
-
-  const handleModalUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setUploading(true);
-      setUploadError(null);
-      setUploadSuccessMsg(null);
-
-      try {
-        const res = await uploadReport(file);
-        setUploading(false);
-        setUploadSuccessMsg(`Successfully uploaded & indexed "${res.fileName || res.filename}"!`);
-        await fetchReports();
-        setTimeout(() => {
-          setUploadSuccessMsg(null);
-          setUploadModalOpen(false);
-        }, 1600);
-      } catch (err: any) {
-        setUploading(false);
-        await fetchReports();
-        setUploadError(err?.message || 'Failed to upload report PDF. Please try again.');
-      }
-    }
-  };
 
   return (
     <div className="space-y-8 animate-fade-in w-full min-w-0">
@@ -104,11 +62,11 @@ export const DashboardPage: React.FC = () => {
 
         <div className="relative z-10 flex flex-wrap items-center gap-3">
           <button
-            onClick={() => setUploadModalOpen(true)}
+            onClick={() => navigate('/upload')}
             className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all transform hover:-translate-y-0.5 active:translate-y-0 flex items-center gap-2 cursor-pointer"
           >
             <UploadCloud className="w-4 h-4" />
-            <span>Upload Filing</span>
+            <span>Upload Filing PDF</span>
           </button>
           <Link
             to="/analyst"
@@ -146,7 +104,7 @@ export const DashboardPage: React.FC = () => {
         <StatCard
           title="AI Index Status"
           value="Active"
-          subtitle={reports.length > 0 ? "Workspace Index Ready" : "Indexed Storage: 0 MB / 500 MB"}
+          subtitle={reports.length > 0 ? "Workspace Index Ready" : "Indexed Storage: Ready"}
           icon={Zap}
           color="violet"
         />
@@ -195,117 +153,11 @@ export const DashboardPage: React.FC = () => {
             title="No Financial Reports Uploaded Yet"
             description="Upload your first corporate 10-K, 10-Q, or earnings report PDF to extract financial insights and perform Q&A with your AI analyst."
             actionLabel="Upload PDF Filing"
-            onAction={() => setUploadModalOpen(true)}
+            onAction={() => navigate('/upload')}
             icon={UploadCloud}
           />
         )}
       </div>
-
-      {/* Upload Modal with Productized Progress Steps */}
-      {uploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-6 relative">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                  <UploadCloud className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                    Upload Financial Report
-                  </h3>
-                  <p className="text-xs text-slate-500">PDF filing up to 25MB</p>
-                </div>
-              </div>
-              {!uploading && (
-                <button
-                  onClick={() => setUploadModalOpen(false)}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-sm font-bold p-1 cursor-pointer"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-
-            {uploadError && (
-              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2.5">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{uploadError}</span>
-              </div>
-            )}
-
-            {uploadSuccessMsg && (
-              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-2.5">
-                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                <span>{uploadSuccessMsg}</span>
-              </div>
-            )}
-
-            <div className="p-8 border-2 border-dashed border-slate-300 dark:border-slate-800 rounded-2xl text-center space-y-4 bg-slate-50/50 dark:bg-slate-950/50">
-              {uploading ? (
-                <div className="py-8 space-y-5">
-                  <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
-                    <div className="absolute inset-0 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin" />
-                    <Loader2 className="w-7 h-7 text-emerald-500 animate-spin" />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                      Processing & Analyzing PDF Filing...
-                    </h4>
-                    <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold animate-pulse">
-                      {uploadStep === 1 && '• Step 1: Deep document parsing & extracting financial tables...'}
-                      {uploadStep === 2 && '• Step 2: Section chunking & generating semantic index...'}
-                      {uploadStep === 3 && '• Step 3: Storing workspace intelligence index...'}
-                    </p>
-                  </div>
-
-                  <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div
-                      className="bg-emerald-500 h-full transition-all duration-1000 rounded-full"
-                      style={{ width: uploadStep === 1 ? '35%' : uploadStep === 2 ? '70%' : '95%' }}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center mx-auto">
-                    <FileText className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-900 dark:text-white">
-                      Select your financial report PDF
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Extracts tables, footnote details, and page citations
-                    </p>
-                  </div>
-                  <label className="inline-block px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-md shadow-emerald-500/20">
-                    <span>Browse PDF File</span>
-                    <input
-                      type="file"
-                      accept="application/pdf"
-                      className="hidden"
-                      onChange={handleModalUpload}
-                    />
-                  </label>
-                </>
-              )}
-            </div>
-
-            {!uploading && (
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setUploadModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

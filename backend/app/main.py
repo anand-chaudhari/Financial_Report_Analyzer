@@ -46,16 +46,55 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS Middleware
+    # CORS Middleware - allows localhost, LAN IPs (192.168.x, 10.x, etc.) and configured origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
+        allow_origin_regex=r"^https?://.*$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Global Exception Handler
+    # GZip Response Compression for high concurrent load optimization
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    # Global Exception Handlers — both inject CORS headers manually.
+    # FastAPI's CORSMiddleware only processes responses that flow through it;
+    # exceptions (both HTTPException and bare Exception) can bypass it,
+    # causing the browser to see a misleading CORS error instead of the real 500.
+    def _cors_headers(request: Request) -> dict:
+        origin = request.headers.get("origin") or "*"
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+
+    from fastapi.exceptions import HTTPException as FastAPIHTTPException
+    from fastapi.exceptions import RequestValidationError
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        logger.warning(f"HTTP {exc.status_code} at {request.url.path}: {exc.detail}")
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "message": str(exc.detail), "error": str(exc.detail)},
+            headers=_cors_headers(request),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        logger.warning(f"Validation error at {request.url.path}: {exc.errors()}")
+        return JSONResponse(
+            status_code=422,
+            content={"success": False, "message": "Request validation failed.", "error": str(exc.errors())},
+            headers=_cors_headers(request),
+        )
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         logger.error(f"Unhandled Exception at {request.url.path}: {str(exc)}", exc_info=True)
@@ -65,7 +104,8 @@ def create_app() -> FastAPI:
                 "success": False,
                 "message": "An internal server error occurred.",
                 "error": str(exc) if settings.DEBUG else "Internal Server Error"
-            }
+            },
+            headers=_cors_headers(request),
         )
 
     # Mount API routes

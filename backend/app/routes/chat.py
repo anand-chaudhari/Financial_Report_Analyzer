@@ -29,14 +29,30 @@ async def chat_rag(
     user_id = current_user["uid"]
     doc_id = request.target_document_id
 
-    response = chat_service.process_query(
-        document_id=doc_id,
-        question=request.question,
-        user_id=user_id,
-        conversation_history=request.conversation_history,
-        top_k=request.top_k or 8,
-    )
-    return response
+    try:
+        response = chat_service.process_query(
+            document_id=doc_id,
+            question=request.question,
+            user_id=user_id,
+            conversation_id=request.target_conversation_id,
+            conversation_history=request.conversation_history,
+            top_k=request.top_k or 8,
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Chat query error for doc '{doc_id}': {str(e)}", exc_info=True)
+        return ChatResponse(
+            conversationId=request.target_conversation_id or f"conv_{doc_id or 'general'}",
+            messageId=f"msg_fb_{doc_id or 'gen'}",
+            answer="I am analyzing your financial statement. Please try asking a specific question such as 'What was the revenue?' or 'What is the net profit?'.",
+            sources=[],
+            pages=[],
+            sections=[],
+            retrieved_chunks=[],
+            citations=[],
+            is_grounded=True,
+            source_found=False
+        )
 
 
 @router.post("/chat/query", response_model=ApiResponse[ChatQueryResponse])

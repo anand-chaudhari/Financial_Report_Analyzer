@@ -35,6 +35,24 @@ def get_chroma_client() -> chromadb.PersistentClient:
     return _chroma_client
 
 
+def _safe_to_list(obj):
+    """Kept for backward compatibility. SafeEmbedder now guarantees list[list[float]] output."""
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
+    if isinstance(obj, list):
+        result = []
+        for item in obj:
+            if hasattr(item, "tolist"):
+                result.append(item.tolist())
+            elif isinstance(item, list):
+                result.append(item)
+            else:
+                result.append(list(item))
+        return result
+    return list(obj)
+
+
+
 class ChromaVectorService:
     """Service handling vector storage and semantic retrieval."""
 
@@ -59,7 +77,8 @@ class ChromaVectorService:
 
         embedder = get_embedding_function()
         texts = [chunk.text for chunk in chunks]
-        embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
+        raw_embeddings = embedder.encode(texts, show_progress_bar=False)
+        embeddings = _safe_to_list(raw_embeddings)
 
         ids = [chunk.chunk_id for chunk in chunks]
         metadatas = [chunk.metadata for chunk in chunks]
@@ -83,7 +102,8 @@ class ChromaVectorService:
     ) -> List[Dict[str, Any]]:
         """Queries the vector store for most relevant chunks matching query_text."""
         embedder = get_embedding_function()
-        query_vector = embedder.encode([query_text]).tolist()
+        raw_query_vector = embedder.encode([query_text])
+        query_vector = _safe_to_list(raw_query_vector)
 
         where_filter: Dict[str, Any] = {"report_id": report_id}
         if user_id:

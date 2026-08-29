@@ -16,16 +16,14 @@ class Settings(BaseSettings):
     # Server Settings
     BACKEND_HOST: str = "0.0.0.0"
     BACKEND_PORT: int = 8000
-    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://192.168.31.221:5173,http://localhost:3000,http://127.0.0.1:3000"
     
     # LLM Settings
-    LLM_PROVIDER: str = "groq"
-    GROQ_API_KEY: str = ""
-    GROQ_PRIMARY_MODEL: str = "groq/compound"
-    GROQ_FALLBACK_MODELS: str = "groq/compound,openai/gpt-oss-120b,qwen/qwen3.6-27b,groq/compound-mini,llama-3.3-70b-versatile,llama-3.1-8b-instant,llama-3.1-405b-reasoning"
+    LLM_PROVIDER: str = "gemini"
     GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""  # kept for legacy imports only
     OPENAI_API_KEY: str = ""
-    DEFAULT_LLM_MODEL: str = "groq/compound"
+    DEFAULT_LLM_MODEL: str = "gemini-1.5-flash"
     
     # ChromaDB & Vector Store
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_data"

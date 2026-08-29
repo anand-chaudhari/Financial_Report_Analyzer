@@ -78,6 +78,42 @@ class DocumentProcessor:
             financial_year=financial_year,
         )
 
+        # Fallback if document is image-heavy or scanned
+        if len(chunks) == 0 and len(pages) > 0:
+            logger.warning("No standard chunks generated. Creating per-page fallback chunks...")
+            for page in pages:
+                fallback_text = (page.raw_text or "").strip()
+                if not fallback_text:
+                    fallback_text = f"Financial Statement Filing - Page {page.page_number} ({company_name}, {financial_year})"
+                chunk_id = f"{document_id}_p{page.page_number}_c0"
+                metadata = {
+                    "document_id": document_id,
+                    "user_id": user_id,
+                    "file_name": file_name,
+                    "company_name": company_name,
+                    "financial_year": financial_year,
+                    "page_number": page.page_number,
+                    "section": "Financial Statements",
+                    "chunk_id": chunk_id,
+                    "chunk_index": 0,
+                    "char_length": len(fallback_text),
+                    "has_tables": True,
+                }
+                chunks.append(
+                    DocumentChunk(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        user_id=user_id,
+                        file_name=file_name,
+                        company_name=company_name,
+                        financial_year=financial_year,
+                        page_number=page.page_number,
+                        section="Financial Statements",
+                        text=fallback_text,
+                        metadata=metadata,
+                    )
+                )
+
         logger.info(
             f"DocumentProcessor complete: {total_pages} total pages ({non_empty_pages} non-empty, "
             f"{scanned_pages} scanned) -> {len(chunks)} chunks created."

@@ -60,10 +60,14 @@ class DocumentChunker:
         section_detector = SectionDetector()
 
         for page in pages:
-            if page.is_empty:
+            raw_text = (page.raw_text or "").strip()
+            if not raw_text:
                 continue
 
-            cleaned_text = TextCleaner.clean(page.raw_text)
+            cleaned_text = TextCleaner.clean(raw_text)
+            if not cleaned_text or len(cleaned_text.strip()) < 5:
+                cleaned_text = raw_text
+
             if not cleaned_text:
                 continue
 
@@ -71,6 +75,8 @@ class DocumentChunker:
             current_section = section_detector.update_and_get_section(cleaned_text)
 
             split_blocks = self.text_splitter.split_text(cleaned_text)
+            if not split_blocks and cleaned_text:
+                split_blocks = [cleaned_text]
 
             for idx, text_block in enumerate(split_blocks):
                 chunk_id = f"{document_id}_p{page.page_number}_c{idx}"

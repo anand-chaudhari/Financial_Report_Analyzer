@@ -1,4 +1,8 @@
-# AI Financial Report Analyzer using Retrieval-Augmented Generation (RAG)
+# FinSight AI — Financial Report Analyzer AI
+
+[![Quick Start Guide](https://img.shields.io/badge/Quick_Start-Copy--Paste_Commands-10b981?style=for-the-badge)](./QUICKSTART.md)
+
+> For instant copy-pasteable commands to run the project without re-installing dependencies, see [QUICKSTART.md](./QUICKSTART.md).
 
 An enterprise-grade, academic full-stack application designed to ingest, process, and analyze corporate financial reports (10-K, 10-Q, quarterly earnings) using Retrieval-Augmented Generation (RAG).
 
@@ -80,30 +84,33 @@ FINANCE_REPORT_ANALYZER_AI/
 ### 1. Backend Setup
 
 ```bash
+# 1. IMPORTANT: Navigate to the backend directory first!
 cd backend
 
-# Create virtual environment
+# 2. Create virtual environment (if not created yet)
 python -m venv .venv
 
-# Activate virtual environment
+# 3. Activate virtual environment
 # Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-# Linux/macOS:
+.\.venv\Scripts\Activate.ps1
+
+# Windows (Command Prompt - CMD):
+.venv\Scripts\activate.bat
+
+# Linux / macOS:
 source .venv/bin/activate
 
-# Install dependencies
+# 4. Install dependencies
 pip install -r requirements.txt
 
-# Configure environment variables
+# 5. Configure environment variables
 cp .env.example .env
 
-# Run development server:
-
-# Option A: After activating virtual environment
-.venv\Scripts\activate
+# 6. Run development server:
+# Option A: After activating virtual environment inside backend/
 uvicorn app.main:app --reload --port 8000
 
-# Option B: Direct run without activation (Windows PowerShell / CMD)
+# Option B: Direct run from backend/ directory (Windows PowerShell / CMD)
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 

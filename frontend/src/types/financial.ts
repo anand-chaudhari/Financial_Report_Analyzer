@@ -1,13 +1,45 @@
-export interface FinancialMetricSeries {
+export interface MetricDataPoint {
   period: string;
   value: number;
   unit: string;
+  page_number?: number;
+  metric_name?: string;
+}
+
+export interface AssetsLiabilitiesPoint {
+  period: string;
+  assets: number;
+  liabilities: number;
+  unit: string;
+  page_number?: number;
+}
+
+export interface CashFlowPoint {
+  period: string;
+  operating?: number;
+  investing?: number;
+  financing?: number;
+  net_cash_flow?: number;
+  unit: string;
+  page_number?: number;
+}
+
+export interface YoYComparisonPoint {
+  metric_name: string;
+  previous_year_period: string;
+  previous_year_value: number;
+  current_year_period: string;
+  current_year_value: number;
+  yoy_change_percent?: number;
+  unit: string;
+  page_number?: number;
 }
 
 export interface KeyRatio {
   name: string;
   value: string;
   description?: string;
+  page_number?: number;
 }
 
 export interface FinancialSummary {
@@ -23,9 +55,16 @@ export interface FinancialSummary {
 export interface FinancialChartData {
   report_id: string;
   company_name: string;
-  revenue_chart: FinancialMetricSeries[];
-  net_income_chart: FinancialMetricSeries[];
-  operating_expenses_chart: FinancialMetricSeries[];
-  key_ratios: KeyRatio[];
-  extracted_at: string;
+  has_data?: boolean;
+  currency?: string;
+  revenue_chart?: MetricDataPoint[];
+  profit_chart?: MetricDataPoint[];
+  net_income_chart?: MetricDataPoint[];
+  expense_chart?: MetricDataPoint[];
+  operating_expenses_chart?: MetricDataPoint[];
+  assets_vs_liabilities_chart?: AssetsLiabilitiesPoint[];
+  cash_flow_chart?: CashFlowPoint[];
+  yoy_comparison_chart?: YoYComparisonPoint[];
+  key_ratios?: KeyRatio[];
+  extracted_at?: string;
 }

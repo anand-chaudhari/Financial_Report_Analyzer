@@ -41,6 +41,15 @@ export const UploadPage: React.FC = () => {
     }
   };
 
+  const handleFileSelect = (file: File) => {
+    setErrorMessage(null);
+    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+      setSelectedFile(file);
+    } else {
+      setErrorMessage('Only PDF documents (.pdf) are supported.');
+    }
+  };
+
   const handleStartProcess = async () => {
     if (!selectedFile) return;
     setUploading(true);
@@ -154,7 +163,7 @@ export const UploadPage: React.FC = () => {
             <p className="text-xs text-slate-500">Redirecting to your reports library...</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-5">
             <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
               <UploadCloud className="w-8 h-8" />
             </div>
@@ -164,7 +173,7 @@ export const UploadPage: React.FC = () => {
                 Drag and drop your PDF report here
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Supports PDF up to 25MB with automated page extraction
+                Supports PDF up to 25MB with automated statement parsing
               </p>
             </div>
 
@@ -186,27 +195,30 @@ export const UploadPage: React.FC = () => {
               </div>
             )}
 
-            <div className="pt-2 flex items-center justify-center gap-3">
-              <label className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs rounded-xl cursor-pointer transition-colors">
-                <span>Browse Files</span>
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      setSelectedFile(e.target.files[0]);
-                    }
-                  }}
-                />
-              </label>
-
-              {selectedFile && (
+            {/* UNIFIED SINGLE PRIMARY UPLOAD BUTTON */}
+            <div className="pt-2 flex justify-center">
+              {!selectedFile ? (
+                <label className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 cursor-pointer transition-all flex items-center gap-2">
+                  <UploadCloud className="w-4 h-4" />
+                  <span>Choose PDF & Upload Report</span>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileSelect(e.target.files[0]);
+                      }
+                    }}
+                  />
+                </label>
+              ) : (
                 <button
                   onClick={handleStartProcess}
-                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer"
+                  className="px-8 py-3 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition-all cursor-pointer flex items-center gap-2"
                 >
-                  Start AI Indexing
+                  <UploadCloud className="w-4 h-4" />
+                  <span>Upload & Start AI Indexing</span>
                 </button>
               )}
             </div>

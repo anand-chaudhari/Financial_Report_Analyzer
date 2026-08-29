@@ -13,7 +13,12 @@ from .chat_schema import (
     ChatHistoryResponse,
 )
 from .financial_schema import (
+    MetricDataPoint,
     FinancialMetricSeries,
+    AssetsLiabilitiesPoint,
+    CashFlowPoint,
+    YoYComparisonPoint,
+    KeyRatio,
     FinancialSummaryResponse,
     FinancialChartDataResponse,
 )
@@ -30,7 +35,12 @@ __all__ = [
     "Citation",
     "ChatMessageItem",
     "ChatHistoryResponse",
+    "MetricDataPoint",
     "FinancialMetricSeries",
+    "AssetsLiabilitiesPoint",
+    "CashFlowPoint",
+    "YoYComparisonPoint",
+    "KeyRatio",
     "FinancialSummaryResponse",
     "FinancialChartDataResponse",
 ]

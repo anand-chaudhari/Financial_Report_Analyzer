@@ -27,9 +27,9 @@ export interface DirectChatResponse {
 }
 
 export const chatService = {
-  async sendChat(payload: DirectChatRequest): Promise<DirectChatResponse> {
-    // Direct POST /api/chat endpoint
-    const response = await apiClient.post<DirectChatResponse>('/chat', payload);
+  async sendChat(payload: DirectChatRequest, signal?: AbortSignal): Promise<DirectChatResponse> {
+    // Direct POST /api/chat endpoint with abort signal support
+    const response = await apiClient.post<DirectChatResponse>('/chat', payload, { signal });
     return response.data;
   },
 

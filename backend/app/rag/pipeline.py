@@ -2,7 +2,7 @@ import re
 from typing import List, Dict, Any, Optional
 from ..vectorstore.chroma_client import ChromaVectorService
 from ..llm.llm_client import LLMService
-from .prompts import FINANCIAL_RAG_SYSTEM_PROMPT
+from .prompts import FINSIGHT_ANALYST_SYSTEM_PROMPT, FINSIGHT_USER_TURN_TEMPLATE
 from ..schemas.chat_schema import Citation, ChatQueryResponse
 from ..utils.logger import setup_logger
 
@@ -19,12 +19,18 @@ class RAGPipeline:
         self.llm_service = LLMService()
 
     def _format_context(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
-        """Formats chunks into numbered context blocks with page tags."""
+        """Formats chunks into labeled evidence blocks."""
         context_blocks = []
-        for chunk in retrieved_chunks:
+        for idx, chunk in enumerate(retrieved_chunks, 1):
             page_no = chunk.get("page_number", 1)
-            text = chunk.get("text", "")
-            context_blocks.append(f"--- [Page {page_no}] ---\n{text}")
+            sec = (chunk.get("section") or "General Financial Content").strip()
+            text = (chunk.get("text") or "").strip()[:600]
+            block = (
+                f"[Evidence {idx}]\n"
+                f"  Source: Page {page_no} | Section: {sec}\n"
+                f"  Content: {text}"
+            )
+            context_blocks.append(block)
         return "\n\n".join(context_blocks)
 
     def _extract_citations(
@@ -87,15 +93,21 @@ class RAGPipeline:
                 source_found=False
             )
 
-        # 2. Build prompt
+        # 2. Build user turn with evidence context
         formatted_context = self._format_context(chunks)
-        prompt = FINANCIAL_RAG_SYSTEM_PROMPT.format(
+        user_turn = FINSIGHT_USER_TURN_TEMPLATE.format(
             context=formatted_context,
-            question=question
+            history="None",
+            question=question,
         )
 
-        # 3. Generate response
-        raw_answer = self.llm_service.generate(prompt)
+        # 3. Generate response with system+user message split
+        raw_answer = self.llm_service.generate(
+            prompt=user_turn,
+            system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
+            temperature=0.15,
+            max_tokens=1200,
+        )
 
         # 4. Check for hallucination / fallback
         if FALLBACK_PHRASE.lower() in raw_answer.lower():

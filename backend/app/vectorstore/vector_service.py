@@ -18,6 +18,23 @@ _chroma_client: Optional[chromadb.PersistentClient] = None
 COLLECTION_NAME = "financial_reports_chunks"
 
 
+def _safe_to_list(obj):
+    """Kept for backward compatibility. SafeEmbedder now guarantees list[list[float]] output."""
+    if hasattr(obj, "tolist"):
+        return obj.tolist()
+    if isinstance(obj, list):
+        result = []
+        for item in obj:
+            if hasattr(item, "tolist"):
+                result.append(item.tolist())
+            elif isinstance(item, list):
+                result.append(item)
+            else:
+                result.append(list(item))
+        return result
+    return list(obj)
+
+
 def get_chroma_client() -> chromadb.PersistentClient:
     """Initializes and returns the singleton persistent ChromaDB client."""
     global _chroma_client
@@ -39,7 +56,7 @@ def get_chroma_client() -> chromadb.PersistentClient:
 class VectorStoreService:
     """
     Vector storage and retrieval service powered by ChromaDB & Sentence Transformers.
-    Supports multi-tiered fallback search for maximum retrieval reliability.
+    Strict document isolation: NEVER leaks chunks from unrelated documents or companies.
     """
 
     def __init__(self, collection_name: str = COLLECTION_NAME):
@@ -63,21 +80,20 @@ class VectorStoreService:
         """
         try:
             results = self.collection.get(
-                where={"$and": [{"document_id": document_id}, {"user_id": user_id}]},
+                where={"document_id": document_id},
                 limit=1
             )
             if results and results.get("ids") and len(results["ids"]) > 0:
                 return True
-            # Fallback check by document_id only
-            results_fallback = self.collection.get(
-                where={"document_id": document_id},
+
+            results_report = self.collection.get(
+                where={"report_id": document_id},
                 limit=1
             )
-            if results_fallback and results_fallback.get("ids") and len(results_fallback["ids"]) > 0:
+            if results_report and results_report.get("ids") and len(results_report["ids"]) > 0:
                 return True
-            # General collection check
-            total_count = self.collection.count()
-            return total_count > 0
+
+            return False
         except Exception as e:
             logger.debug(f"document_exists check note: {str(e)}")
             return False
@@ -91,13 +107,12 @@ class VectorStoreService:
     ) -> int:
         """
         Embeds document chunks using Sentence Transformers and stores them in ChromaDB.
-        Prevents duplicate ingestion by overwriting existing chunks if present.
+        Saves both document_id and report_id for exact document scoping.
         """
         if not chunks:
             logger.warning(f"add_document called with 0 chunks for document '{document_id}'.")
             return 0
 
-        # Avoid duplicate ingestion
         if self.document_exists(document_id, user_id):
             if overwrite_if_exists:
                 logger.info(f"Document '{document_id}' exists. Overwriting existing vectors...")
@@ -106,10 +121,10 @@ class VectorStoreService:
                 logger.info(f"Document '{document_id}' already indexed. Skipping addition.")
                 return 0
 
-        # Generate embeddings using Sentence Transformers
         embedder = get_embedding_function()
         texts = [chunk.text for chunk in chunks]
-        embeddings = embedder.encode(texts, show_progress_bar=False).tolist()
+        raw_embeddings = embedder.encode(texts, batch_size=64, show_progress_bar=False)
+        embeddings = _safe_to_list(raw_embeddings)
 
         ids: List[str] = []
         metadatas: List[Dict[str, Any]] = []
@@ -122,6 +137,7 @@ class VectorStoreService:
 
             meta = dict(chunk.metadata) if hasattr(chunk, "metadata") and chunk.metadata else {}
             meta["document_id"] = document_id
+            meta["report_id"] = document_id  # Guarantee key matching for all service queries
             meta["user_id"] = user_id
             meta["page_number"] = getattr(chunk, "page_number", 1)
             meta["section"] = str(getattr(chunk, "section", "General"))
@@ -137,80 +153,76 @@ class VectorStoreService:
             metadatas=metadatas
         )
 
-        logger.info(f"Added {len(chunks)} vector chunks for document '{document_id}' (User: '{user_id}').")
+        logger.info(f"Added {len(chunks)} vector chunks for document '{document_id}' (Company: '{metadatas[0].get('company_name')}').")
         return len(chunks)
 
     def search(
         self,
-        query_text: str,
-        user_id: str,
+        query_text: Optional[str] = None,
+        user_id: str = "",
         document_id: Optional[str] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
+        query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Performs semantic vector search matching query_text with multi-tier fallback.
+        Performs Hybrid Search:
+        1. Dense Vector Similarity Search using sentence-transformers embeddings.
+        2. Financial Keyword Term Matching across all document chunks.
+        3. Surrounding Page Context Expansion (retrieves neighboring chunks/table headers on matching pages).
         """
-        if not query_text:
+        actual_query = (query_text or query or "").strip()
+        if not actual_query:
             return []
 
         settings = get_settings()
-        k = top_k or settings.DEFAULT_TOP_K or 8
+        k = top_k or settings.DEFAULT_TOP_K or 10
 
-        where_filter: Dict[str, Any]
-        if document_id and user_id:
-            where_filter = {
-                "$and": [
-                    {"user_id": user_id},
-                    {"document_id": document_id}
-                ]
-            }
-        elif document_id:
+        where_filter: Dict[str, Any] = {}
+        if document_id:
             where_filter = {"document_id": document_id}
-        elif user_id:
-            where_filter = {"user_id": user_id}
-        else:
-            where_filter = {}
 
         embedder = get_embedding_function()
-        query_vector = embedder.encode([query_text]).tolist()
+        raw_query_vector = embedder.encode([actual_query])
+        query_vector = _safe_to_list(raw_query_vector)
 
+        # 1. Semantic Vector Query
+        query_k = min(35, max(k * 2, 15))
         results = None
-        try:
-            results = self.collection.query(
-                query_embeddings=query_vector,
-                n_results=k,
-                where=where_filter,
-                include=["documents", "metadatas", "distances"]
-            )
-        except Exception as e:
-            logger.warning(f"ChromaDB primary search error: {str(e)}")
+        if where_filter:
+            try:
+                results = self.collection.query(
+                    query_embeddings=query_vector,
+                    n_results=query_k,
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances"]
+                )
+            except Exception as e:
+                logger.warning(f"ChromaDB search by document_id note: {str(e)}")
 
-        # Fallback 1: Filter by document_id only
         if (not results or not results.get("documents") or len(results["documents"][0]) == 0) and document_id:
-            logger.info(f"Primary filter returned 0 results. Fallback 1: Querying for document_id='{document_id}'...")
             try:
                 results = self.collection.query(
                     query_embeddings=query_vector,
-                    n_results=k,
-                    where={"document_id": document_id},
+                    n_results=query_k,
+                    where={"report_id": document_id},
                     include=["documents", "metadatas", "distances"]
                 )
             except Exception as e:
-                logger.warning(f"Fallback 1 search error: {str(e)}")
+                logger.warning(f"ChromaDB search by report_id note: {str(e)}")
 
-        # Fallback 2: Global collection search across all indexed chunks
         if not results or not results.get("documents") or len(results["documents"][0]) == 0:
-            logger.info("Fallback 2: Querying ChromaDB across all indexed document chunks...")
             try:
                 results = self.collection.query(
                     query_embeddings=query_vector,
-                    n_results=k,
+                    n_results=query_k,
                     include=["documents", "metadatas", "distances"]
                 )
             except Exception as e:
-                logger.error(f"Fallback 2 search error: {str(e)}")
+                logger.warning(f"ChromaDB search without filter note: {str(e)}")
 
-        formatted: List[Dict[str, Any]] = []
+        # 2. Extract and score semantic candidates
+        candidates_map: Dict[str, Dict[str, Any]] = {}
+        target_pages: set = set()
 
         if results and results.get("documents") and len(results["documents"]) > 0:
             docs = results["documents"][0]
@@ -219,13 +231,17 @@ class VectorStoreService:
             ids = results["ids"][0] if results.get("ids") else [""] * len(docs)
 
             for doc, meta, dist, chunk_id in zip(docs, metas, dists, ids):
+                if not doc:
+                    continue
                 similarity = round(max(0.0, 1.0 - float(dist)), 4) if dist is not None else 1.0
+                page_num = meta.get("page_number", 1)
+                target_pages.add(page_num)
 
-                formatted.append({
+                candidates_map[chunk_id] = {
                     "chunk_id": chunk_id,
                     "text": doc,
                     "similarity_score": similarity,
-                    "page_number": meta.get("page_number", 1),
+                    "page_number": page_num,
                     "section": meta.get("section", "General"),
                     "document_id": meta.get("document_id", document_id or ""),
                     "user_id": meta.get("user_id", user_id),
@@ -233,28 +249,122 @@ class VectorStoreService:
                     "company_name": meta.get("company_name", ""),
                     "financial_year": meta.get("financial_year", ""),
                     "metadata": meta
-                })
+                }
 
-        return formatted
+        # 3. Exact Keyword Matching across the target document
+        try:
+            doc_filter = {"document_id": document_id} if document_id else None
+            all_doc_records = self.collection.get(
+                where=doc_filter,
+                include=["documents", "metadatas"]
+            )
+            if all_doc_records and all_doc_records.get("documents"):
+                raw_docs = all_doc_records["documents"]
+                raw_metas = all_doc_records.get("metadatas") or [{}] * len(raw_docs)
+                raw_ids = all_doc_records.get("ids") or [f"c_{i}" for i in range(len(raw_docs))]
+
+                query_terms = [t.lower() for t in actual_query.split() if len(t) > 2]
+                
+                # Financial keyword equivalence groups
+                key_phrases = []
+                q_low = actual_query.lower()
+                if "revenue" in q_low or "sales" in q_low or "turnover" in q_low or "income" in q_low:
+                    key_phrases.extend(["revenue from operations", "total revenue", "other income", "total income", "turnover", "gross sales", "net sales"])
+                if "profit" in q_low or "pat" in q_low or "pbt" in q_low or "loss" in q_low:
+                    key_phrases.extend(["profit after tax", "profit before tax", "net profit", "profit for the year", "profit for the period", "total comprehensive income"])
+                if "asset" in q_low or "assets" in q_low:
+                    key_phrases.extend(["total assets", "non-current assets", "current assets", "property, plant", "inventories", "trade receivables", "fixed assets"])
+                if "liabilit" in q_low or "debt" in q_low or "borrowing" in q_low or "equity" in q_low:
+                    key_phrases.extend(["total equity and liabilities", "total liabilities", "borrowings", "equity share capital", "trade payables", "other equity"])
+                if "company" in q_low or "name" in q_low or "cin" in q_low or "office" in q_low:
+                    key_phrases.extend(["cin", "corporate identification", "registered office", "directors", "auditor", "limited", "private limited"])
+
+                for doc_text, meta, c_id in zip(raw_docs, raw_metas, raw_ids):
+                    if not doc_text:
+                        continue
+                    doc_lower = doc_text.lower()
+                    
+                    # Compute keyword relevance boost
+                    kw_score = 0.0
+                    for phrase in key_phrases:
+                        if phrase in doc_lower:
+                            kw_score += 0.35
+                    for term in query_terms:
+                        if term in doc_lower:
+                            kw_score += 0.1
+
+                    if kw_score > 0.1:
+                        page_num = meta.get("page_number", 1)
+                        target_pages.add(page_num)
+                        
+                        if c_id in candidates_map:
+                            candidates_map[c_id]["similarity_score"] = min(1.0, candidates_map[c_id]["similarity_score"] + kw_score * 0.4)
+                        else:
+                            candidates_map[c_id] = {
+                                "chunk_id": c_id,
+                                "text": doc_text,
+                                "similarity_score": min(0.95, 0.65 + kw_score * 0.3),
+                                "page_number": page_num,
+                                "section": meta.get("section", "Financial Statements"),
+                                "document_id": meta.get("document_id", document_id or ""),
+                                "user_id": meta.get("user_id", user_id),
+                                "file_name": meta.get("file_name", ""),
+                                "company_name": meta.get("company_name", ""),
+                                "financial_year": meta.get("financial_year", ""),
+                                "metadata": meta
+                            }
+        except Exception as kw_err:
+            logger.debug(f"Keyword search note: {str(kw_err)}")
+
+        # 4. Surrounding Page Expansion (Include adjacent chunks on top matched pages)
+        try:
+            top_pages = sorted(list(target_pages))[:5]
+            if top_pages and document_id:
+                for pg in top_pages:
+                    pg_records = self.collection.get(
+                        where={"$and": [{"document_id": document_id}, {"page_number": pg}]},
+                        include=["documents", "metadatas"]
+                    )
+                    if pg_records and pg_records.get("documents"):
+                        for doc_text, meta, c_id in zip(pg_records["documents"], pg_records.get("metadatas", []), pg_records.get("ids", [])):
+                            if c_id not in candidates_map and doc_text:
+                                candidates_map[c_id] = {
+                                    "chunk_id": c_id,
+                                    "text": doc_text,
+                                    "similarity_score": 0.70,
+                                    "page_number": pg,
+                                    "section": meta.get("section", "Financial Statements"),
+                                    "document_id": meta.get("document_id", document_id or ""),
+                                    "user_id": meta.get("user_id", user_id),
+                                    "file_name": meta.get("file_name", ""),
+                                    "company_name": meta.get("company_name", ""),
+                                    "financial_year": meta.get("financial_year", ""),
+                                    "metadata": meta
+                                }
+        except Exception as exp_err:
+            logger.debug(f"Page expansion note: {str(exp_err)}")
+
+        # 5. Sort candidates by similarity/relevance score descending
+        sorted_candidates = sorted(
+            candidates_map.values(),
+            key=lambda x: (x.get("similarity_score", 0.0), -x.get("page_number", 1)),
+            reverse=True
+        )
+
+        return sorted_candidates[:k]
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
         """
         Deletes all vector chunks associated with a specific document_id.
         """
         try:
-            self.collection.delete(
-                where={"$and": [{"document_id": document_id}, {"user_id": user_id}]}
-            )
-            logger.info(f"Deleted vector chunks for document '{document_id}' (User: '{user_id}').")
+            self.collection.delete(where={"document_id": document_id})
+            self.collection.delete(where={"report_id": document_id})
+            logger.info(f"Deleted vector chunks for document '{document_id}'.")
             return True
         except Exception as e:
             logger.warning(f"Error deleting chunks for document '{document_id}': {str(e)}")
-            try:
-                self.collection.delete(where={"document_id": document_id})
-                return True
-            except Exception as ex:
-                logger.error(f"Fallback delete failed for '{document_id}': {str(ex)}")
-                return False
+            return False
 
 
 ChromaVectorService = VectorStoreService

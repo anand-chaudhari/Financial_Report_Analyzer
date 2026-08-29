@@ -14,23 +14,19 @@ import {
   Check,
   RefreshCw,
   Trash2,
-  AlertCircle,
   Eye,
   X,
   BookOpen,
   ChevronRight,
+  ChevronDown,
   ShieldCheck,
-  Layers,
-  Calendar,
-  Building2,
   FileCheck,
   CornerDownLeft,
   MessageSquare,
   Plus,
   Edit3,
-  Clock,
+  Square,
 } from 'lucide-react';
-import { formatBytes } from '../utils/formatters';
 
 interface MessageUIItem {
   id: string;
@@ -41,6 +37,330 @@ interface MessageUIItem {
   sections?: string[];
   sources?: SourceMetadata[];
 }
+
+/**
+ * Deduplicates citations by page_number + section name
+ */
+const getDeduplicatedSources = (sources?: SourceMetadata[]): SourceMetadata[] => {
+  if (!sources || sources.length === 0) return [];
+  const seen = new Set<string>();
+  const unique: SourceMetadata[] = [];
+
+  for (const src of sources) {
+    const page = src.page_number;
+    const sec = (src.section || 'General Section').trim();
+    const key = `${page}_${sec.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(src);
+    }
+  }
+  return unique;
+};
+
+/**
+ * Formats inline text with bold, italic, code, and interactive citation badges
+ */
+const renderInlineMarkdown = (
+  text: string,
+  sources?: SourceMetadata[],
+  onOpenSourceModal?: (s: SourceMetadata) => void
+): React.ReactNode => {
+  if (!text) return null;
+
+  // Sanitize internal tokens
+  let cleanText = text
+    .replace(/svgPage\s*\d+/gi, '')
+    .replace(/Evidence\s*\d+\s*[:\-]/gi, '')
+    .trim();
+
+  // Pattern matches: [Page X], (Page X), 【Page X】, Page X — Section, **bold**, *italic*, `code`
+  const tokenRegex = /(\[(?:Page\s*)?\d+(?:\s*—[^\]]+)?\]|\(Page\s*\d+\)|【Page\s*\d+】|Page\s*\d+\s*—\s*[A-Za-z0-9\s,\.\-&]+|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenRegex.exec(cleanText)) !== null) {
+    const matchedStr = match[0];
+    const index = match.index;
+
+    if (index > lastIndex) {
+      parts.push(cleanText.substring(lastIndex, index));
+    }
+
+    // A. Bold text
+    if (matchedStr.startsWith('**') && matchedStr.endsWith('**')) {
+      parts.push(
+        <strong key={`b_${index}`} className="font-bold text-slate-900 dark:text-white">
+          {matchedStr.slice(2, -2)}
+        </strong>
+      );
+    }
+    // B. Italic text
+    else if (matchedStr.startsWith('*') && matchedStr.endsWith('*')) {
+      parts.push(
+        <em key={`i_${index}`} className="italic text-slate-700 dark:text-slate-300">
+          {matchedStr.slice(1, -1)}
+        </em>
+      );
+    }
+    // C. Code text
+    else if (matchedStr.startsWith('`') && matchedStr.endsWith('`')) {
+      parts.push(
+        <code key={`c_${index}`} className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-xs text-emerald-600 dark:text-emerald-400">
+          {matchedStr.slice(1, -1)}
+        </code>
+      );
+    }
+    // D. Citation reference (e.g. [Page 291], Page 291 — Balance Sheet)
+    else {
+      const pageMatch = matchedStr.match(/Page\s*(\d+)/i);
+      const pageNum = pageMatch ? parseInt(pageMatch[1], 10) : null;
+
+      if (pageNum) {
+        const matchedSource = sources?.find((s) => s.page_number === pageNum) || {
+          page_number: pageNum,
+          section: matchedStr.includes('—') ? matchedStr.split('—')[1].replace(/[\]\)]/g, '').trim() : 'Financial Filing Reference',
+          document_name: 'Financial Filing',
+          snippet: `Referenced statement snippet on Page ${pageNum}.`,
+        };
+
+        parts.push(
+          <button
+            key={`badge_${index}`}
+            onClick={() => onOpenSourceModal?.(matchedSource)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 mx-1 my-0.5 rounded-md bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 font-extrabold text-[11px] transition-all cursor-pointer shadow-xs group align-middle"
+            title={`View citation for Page ${pageNum}`}
+          >
+            <ShieldCheck className="w-3 h-3 text-emerald-500 group-hover:scale-110 transition-transform" />
+            <span>Page {pageNum}</span>
+          </button>
+        );
+      } else {
+        parts.push(matchedStr);
+      }
+    }
+
+    lastIndex = tokenRegex.lastIndex;
+  }
+
+  if (lastIndex < cleanText.length) {
+    parts.push(cleanText.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : cleanText;
+};
+
+/**
+ * Rich Markdown Component that parses Headings, Tables, Lists, and Paragraphs
+ */
+const RichMarkdownRenderer: React.FC<{
+  content: string;
+  sources?: SourceMetadata[];
+  onOpenSourceModal?: (s: SourceMetadata) => void;
+}> = ({ content, sources, onOpenSourceModal }) => {
+  if (!content) return null;
+
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let tableBuffer: string[] = [];
+  let listBuffer: string[] = [];
+
+  const flushTable = (keyIndex: number) => {
+    if (tableBuffer.length < 2) {
+      tableBuffer.forEach((line, lIdx) => {
+        elements.push(
+          <p key={`t_fallback_${keyIndex}_${lIdx}`} className="my-1 text-slate-700 dark:text-slate-300">
+            {renderInlineMarkdown(line, sources, onOpenSourceModal)}
+          </p>
+        );
+      });
+      tableBuffer = [];
+      return;
+    }
+
+    const headerLine = tableBuffer[0];
+    const rowLines = tableBuffer.slice(2); // Skip separator line | --- | --- |
+
+    const parseCells = (row: string) =>
+      row
+        .split('|')
+        .map((c) => c.trim())
+        .filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+
+    const headers = parseCells(headerLine);
+
+    elements.push(
+      <div key={`table_${keyIndex}`} className="my-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <table className="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr className="bg-slate-100 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-700">
+              {headers.map((h, hIdx) => (
+                <th key={`th_${hIdx}`} className="px-3 py-2 font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200 text-[11px]">
+                  {renderInlineMarkdown(h, sources, onOpenSourceModal)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900/60">
+            {rowLines.map((rowStr, rIdx) => {
+              const cells = parseCells(rowStr);
+              return (
+                <tr key={`tr_${rIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                  {cells.map((cell, cIdx) => (
+                    <td key={`td_${cIdx}`} className="px-3 py-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      {renderInlineMarkdown(cell, sources, onOpenSourceModal)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableBuffer = [];
+  };
+
+  const flushList = (keyIndex: number) => {
+    if (listBuffer.length === 0) return;
+    elements.push(
+      <ul key={`ul_${keyIndex}`} className="my-2 space-y-1.5 pl-1">
+        {listBuffer.map((item, idx) => (
+          <li key={`li_${idx}`} className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2 flex-shrink-0" />
+            <span className="flex-1 leading-relaxed">
+              {renderInlineMarkdown(item, sources, onOpenSourceModal)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+    listBuffer = [];
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    // 1. Table Detection
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      if (listBuffer.length > 0) flushList(i);
+      tableBuffer.push(trimmed);
+      continue;
+    } else if (tableBuffer.length > 0) {
+      flushTable(i);
+    }
+
+    // 2. Bullet List Detection
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.startsWith('• ')) {
+      listBuffer.push(trimmed.replace(/^[-*•]\s+/, ''));
+      continue;
+    } else if (listBuffer.length > 0) {
+      flushList(i);
+    }
+
+    // 3. Blank Lines
+    if (!trimmed) {
+      continue;
+    }
+
+    // 4. Headings
+    if (trimmed.startsWith('### ')) {
+      elements.push(
+        <h3 key={`h3_${i}`} className="text-xs sm:text-sm font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mt-3.5 mb-1.5 flex items-center gap-1.5">
+          <span>{trimmed.replace(/^###\s+/, '')}</span>
+        </h3>
+      );
+      continue;
+    }
+    if (trimmed.startsWith('## ')) {
+      elements.push(
+        <h2 key={`h2_${i}`} className="text-sm sm:text-base font-bold text-slate-900 dark:text-white mt-3 mb-1.5">
+          {trimmed.replace(/^##\s+/, '')}
+        </h2>
+      );
+      continue;
+    }
+    if (trimmed.startsWith('# ')) {
+      elements.push(
+        <h1 key={`h1_${i}`} className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white mt-3 mb-2">
+          {trimmed.replace(/^#\s+/, '')}
+        </h1>
+      );
+      continue;
+    }
+
+    // 5. Horizontal Rule
+    if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+      elements.push(
+        <hr key={`hr_${i}`} className="my-3 border-slate-200 dark:border-slate-800" />
+      );
+      continue;
+    }
+
+    // 6. Regular Paragraph
+    elements.push(
+      <p key={`p_${i}`} className="my-1.5 text-slate-700 dark:text-slate-300 leading-relaxed">
+        {renderInlineMarkdown(trimmed, sources, onOpenSourceModal)}
+      </p>
+    );
+  }
+
+  if (tableBuffer.length > 0) flushTable(lines.length);
+  if (listBuffer.length > 0) flushList(lines.length);
+
+  return <div className="space-y-0.5 text-xs sm:text-sm">{elements}</div>;
+};
+
+/**
+ * Compact, collapsible Citations Accordion Component with deduplicated tags
+ */
+const CitationsAccordion: React.FC<{
+  sources: SourceMetadata[];
+  onOpenModal: (s: SourceMetadata) => void;
+}> = ({ sources, onOpenModal }) => {
+  const [expanded, setExpanded] = useState(true);
+  const uniqueSources = getDeduplicatedSources(sources);
+
+  if (uniqueSources.length === 0) return null;
+
+  return (
+    <div className="pt-2 border-t border-slate-200/60 dark:border-slate-800/60 space-y-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center justify-between w-full text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer"
+      >
+        <span className="flex items-center gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Verified Citations ({uniqueSources.length})</span>
+        </span>
+        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+          <span>{expanded ? 'Collapse' : 'Expand'}</span>
+          {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="flex flex-wrap gap-2 items-center animate-fade-in pt-1">
+          {uniqueSources.map((src, idx) => (
+            <button
+              key={`${src.page_number}_${idx}`}
+              onClick={() => onOpenModal(src)}
+              className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 hover:bg-emerald-500/5 text-slate-700 dark:text-slate-300 transition-all text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs group"
+            >
+              <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">
+                Page {src.page_number}
+              </span>
+              <span className="truncate max-w-[140px]">{src.section || 'Report Section'}</span>
+              <Eye className="w-3 h-3 text-slate-400 group-hover:text-emerald-500 flex-shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const AnalystPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -53,8 +373,8 @@ export const AnalystPage: React.FC = () => {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(convIdParam || null);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [queryText, setQueryText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [errorState, setErrorState] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [messages, setMessages] = useState<MessageUIItem[]>([]);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [activeSourceModal, setActiveSourceModal] = useState<SourceMetadata | null>(null);
@@ -65,6 +385,15 @@ export const AnalystPage: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleStopResponse = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsGenerating(false);
+  };
 
   useEffect(() => {
     if (!selectedReportId && reports.length > 0) {
@@ -76,14 +405,19 @@ export const AnalystPage: React.FC = () => {
 
   // Load User Conversations for selected report
   const loadConversations = useCallback(async () => {
-    const list = await conversationService.getConversations(selectedReportId);
-    setConversations(list);
+    if (!selectedReportId) return;
+    try {
+      const list = await conversationService.getConversations(selectedReportId);
+      setConversations(list);
 
-    if (convIdParam && !activeConversationId) {
-      const match = list.find((c) => c.conversationId === convIdParam);
-      if (match) {
-        setActiveConversationId(match.conversationId);
+      if (convIdParam && !activeConversationId) {
+        const match = list.find((c) => c.conversationId === convIdParam);
+        if (match) {
+          setActiveConversationId(match.conversationId);
+        }
       }
+    } catch (err) {
+      console.warn('Could not load conversations:', err);
     }
   }, [selectedReportId, convIdParam, activeConversationId]);
 
@@ -91,10 +425,9 @@ export const AnalystPage: React.FC = () => {
     loadConversations();
   }, [loadConversations]);
 
-  // Load messages when activeConversationId changes
+  // Load messages when activeConversationId changes (history load ONLY)
   const loadConversationMessages = useCallback(async (convId: string) => {
-    setLoading(true);
-    setErrorState(null);
+    setIsLoadingHistory(true);
     try {
       const conv = await conversationService.getConversation(convId);
       if (conv && conv.messages) {
@@ -108,13 +441,25 @@ export const AnalystPage: React.FC = () => {
           sections: m.sources ? Array.from(new Set(m.sources.map((s) => s.section))) : [],
         }));
         setMessages(mapped);
+      } else {
+        setMessages([]);
       }
     } catch (err: any) {
       console.warn('Error loading conversation messages:', err);
+      // Clean up stale query param if conversation is not found
+      if (err?.response?.status === 404) {
+        setActiveConversationId(null);
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('conv');
+          return next;
+        });
+        setMessages([]);
+      }
     } finally {
-      setLoading(false);
+      setIsLoadingHistory(false);
     }
-  }, []);
+  }, [setSearchParams]);
 
   useEffect(() => {
     if (activeConversationId) {
@@ -128,7 +473,7 @@ export const AnalystPage: React.FC = () => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, loading]);
+  }, [messages, isGenerating]);
 
   const suggestedQuestions = [
     "What was the company's revenue?",
@@ -142,7 +487,6 @@ export const AnalystPage: React.FC = () => {
   const handleStartNewConversation = () => {
     setActiveConversationId(null);
     setMessages([]);
-    setErrorState(null);
     setSearchParams(selectedReportId ? { doc: selectedReportId } : {});
   };
 
@@ -155,9 +499,8 @@ export const AnalystPage: React.FC = () => {
   };
 
   const handleSendQuery = async (promptText: string) => {
-    if (!promptText.trim() || loading) return;
+    if (!promptText.trim() || isGenerating) return;
 
-    setErrorState(null);
     const userPrompt = promptText.trim();
 
     const userMsg: MessageUIItem = {
@@ -169,11 +512,14 @@ export const AnalystPage: React.FC = () => {
 
     setMessages((prev) => [...prev, userMsg]);
     setQueryText('');
-    setLoading(true);
+    setIsGenerating(true);
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const historyForBackend = messages.slice(-6).map((m) => ({
@@ -181,18 +527,22 @@ export const AnalystPage: React.FC = () => {
         text: m.text,
       }));
 
-      // Live POST /api/chat call saving user question & AI response
+      // Live POST /api/chat call with abort signal
       const resData = await chatService.sendChat({
         conversation_id: activeConversationId || undefined,
         document_id: selectedReportId || activeReport?.id || activeReport?.documentId || 'doc_unknown',
         question: userPrompt,
         conversation_history: historyForBackend,
-      });
+      }, controller.signal);
 
       if (resData && resData.answer) {
-        if (resData.conversationId && !activeConversationId) {
-          setActiveConversationId(resData.conversationId);
-          setSearchParams({ doc: selectedReportId, conv: resData.conversationId });
+        const newConvId = resData.conversationId || activeConversationId;
+        if (newConvId && !activeConversationId) {
+          setActiveConversationId(newConvId);
+          setSearchParams({ doc: selectedReportId, conv: newConvId });
+        } else if (newConvId && activeConversationId !== newConvId) {
+          setActiveConversationId(newConvId);
+          setSearchParams({ doc: selectedReportId, conv: newConvId });
         }
 
         const fileName = activeReport?.fileName || activeReport?.filename || 'Financial_Report.pdf';
@@ -234,16 +584,28 @@ export const AnalystPage: React.FC = () => {
         };
 
         setMessages((prev) => [...prev, aiMsg]);
-        setLoading(false);
+        setIsGenerating(false);
+        abortControllerRef.current = null;
         await loadConversations();
       } else {
         throw new Error('Invalid response from AI Analyst service.');
       }
     } catch (err: any) {
+      abortControllerRef.current = null;
+      setIsGenerating(false);
+      if (err?.name === 'CanceledError' || err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') {
+        console.log('Response generation cancelled by user.');
+        return;
+      }
       console.error('API /api/chat error:', err);
-      setLoading(false);
-      const errDetail = err?.response?.data?.detail || err?.message || 'Failed to connect to AI Analyst backend service.';
-      setErrorState(errDetail);
+      // Show user-friendly error in the chat stream itself
+      const errMsg: MessageUIItem = {
+        id: `err_${Date.now()}`,
+        sender: 'assistant',
+        text: `⚠️ I couldn’t generate an answer at this moment. Please try again or rephrase your question.\n\n*Technical detail: ${err?.response?.data?.detail || err?.message || 'Connection failed.'}*`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => [...prev, errMsg]);
     }
   };
 
@@ -267,7 +629,6 @@ export const AnalystPage: React.FC = () => {
       handleStartNewConversation();
     } else {
       setMessages([]);
-      setErrorState(null);
     }
   };
 
@@ -299,12 +660,22 @@ export const AnalystPage: React.FC = () => {
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQueryText(e.target.value);
     e.target.style.height = 'auto';
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`;
   };
+
+  // Sanitize a metadata string — strips raw tuple/object artifacts like {(...), }
+  const sanitizeMeta = (val: any): string => {
+    if (!val) return '';
+    const s = String(val);
+    // Remove surrounding set/tuple artifacts like {(...), } or {"value"}
+    return s.replace(/^\{\(?|\)?\,?\}$/g, '').replace(/^["']|["']$/g, '').trim();
+  };
+
+  const reportTitle = sanitizeMeta(activeReport?.companyName || activeReport?.company_name || activeReport?.filename || 'Report');
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full min-w-0 pb-6 animate-fade-in">
-      {/* LEFT PANEL: Report Details & Persistent Conversation History */}
+      {/* LEFT PANEL: Report Details, History & Compact Prompts */}
       <div className="w-full lg:w-80 flex-shrink-0 space-y-4">
         {/* Selected Report Card */}
         <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
@@ -350,16 +721,16 @@ export const AnalystPage: React.FC = () => {
 
           {activeReport && (
             <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-500 text-[11px]">Company:</span>
-                <span className="font-bold text-slate-900 dark:text-white truncate max-w-[130px]">
-                  {activeReport.companyName || activeReport.company_name}
+              <div className="flex justify-between items-start gap-2">
+                <span className="text-slate-500 text-[11px] flex-shrink-0">Company:</span>
+                <span className="font-bold text-slate-900 dark:text-white text-right text-[11px] leading-snug" title={sanitizeMeta(activeReport.companyName || activeReport.company_name)}>
+                  {sanitizeMeta(activeReport.companyName || activeReport.company_name)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500 text-[11px]">Fiscal Period:</span>
                 <span className="font-bold text-slate-900 dark:text-white">
-                  {activeReport.financialYear || activeReport.fiscal_period}
+                  {sanitizeMeta(activeReport.financialYear || activeReport.fiscal_period)}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -376,7 +747,7 @@ export const AnalystPage: React.FC = () => {
           )}
         </div>
 
-        {/* Conversation History Sidebar */}
+        {/* Conversation History Sidebar with Enhanced Active Badge */}
         <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -394,7 +765,7 @@ export const AnalystPage: React.FC = () => {
             </button>
           </div>
 
-          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
             {conversations.length > 0 ? (
               conversations.map((c) => {
                 const isActive = c.conversationId === activeConversationId;
@@ -402,20 +773,27 @@ export const AnalystPage: React.FC = () => {
                   <div
                     key={c.conversationId}
                     onClick={() => handleSelectConversation(c)}
-                    className={`p-3 rounded-2xl border text-xs transition-all cursor-pointer flex items-center justify-between group ${
+                    className={`p-3.5 rounded-2xl border text-xs transition-all cursor-pointer flex items-center justify-between group relative overflow-hidden ${
                       isActive
-                        ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                        ? 'bg-emerald-500/15 border-2 border-emerald-500 text-emerald-950 dark:text-emerald-100 font-extrabold shadow-sm'
                         : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
                     }`}
                   >
-                    <div className="min-w-0 pr-2 space-y-0.5">
-                      <p className="truncate text-xs font-semibold">{c.title}</p>
+                    <div className="min-w-0 pr-2 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-xs font-bold">{c.title}</p>
+                        {isActive && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[9px] font-black uppercase tracking-wider flex-shrink-0">
+                            Active
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[10px] text-slate-400 font-normal">
                         {new Date(c.updatedAt).toLocaleDateString()}
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -446,25 +824,26 @@ export const AnalystPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Suggested Prompts */}
-        <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-2.5">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Suggested Prompts</span>
+        {/* Compact Suggested Prompts (Hidden when conversation active) */}
+        {messages.length === 0 && (
+          <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-2 animate-fade-in">
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Suggested Prompts</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {suggestedQuestions.map((q, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSendQuery(q)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-950 hover:bg-emerald-500/10 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/30 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all text-left cursor-pointer"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="space-y-1.5">
-            {suggestedQuestions.map((q, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSendQuery(q)}
-                className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950 hover:bg-emerald-500/10 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/30 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all text-left flex items-center justify-between group cursor-pointer"
-              >
-                <span className="line-clamp-2">{q}</span>
-                <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500 flex-shrink-0 ml-1" />
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* CENTER PANEL: Conversation Stream & Output Area */}
@@ -499,103 +878,100 @@ export const AnalystPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Conversation Message Stream */}
+        {/* Conversation Message Stream with Distinct User/AI Separation */}
         <div className="flex-1 min-h-[460px] max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
           {messages.length > 0 ? (
             messages.map((msg) => (
               <div
                 key={msg.id}
-                className={`flex gap-3.5 max-w-3xl ${
-                  msg.sender === 'user' ? 'ml-auto flex-row-reverse' : ''
+                className={`flex gap-3.5 ${
+                  msg.sender === 'user' ? 'justify-end' : 'justify-start'
                 }`}
               >
-                <div
-                  className={`w-9 h-9 rounded-2xl flex items-center justify-center flex-shrink-0 text-xs font-bold shadow-sm ${
-                    msg.sender === 'user'
-                      ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900'
-                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                  }`}
-                >
-                  {msg.sender === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-                </div>
+                {msg.sender === 'assistant' && (
+                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/20 shadow-xs">
+                    <Bot className="w-4 h-4" />
+                  </div>
+                )}
 
                 <div
-                  className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm w-full min-w-0 ${
+                  className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm min-w-0 ${
                     msg.sender === 'user'
-                      ? 'bg-slate-900 dark:bg-slate-800 text-white rounded-tr-none max-w-xl ml-auto'
-                      : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none'
+                      ? 'bg-emerald-600 dark:bg-emerald-600 text-white rounded-tr-none max-w-xl ml-auto'
+                      : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none max-w-3xl w-full'
                   }`}
                 >
-                  {/* Message Body */}
-                  <div className="whitespace-pre-wrap text-xs sm:text-sm font-normal">
-                    {msg.text}
+                  {/* Message Header/Sender Title */}
+                  <div className="flex items-center justify-between gap-2 border-b pb-2 border-emerald-500/30 dark:border-slate-800/80">
+                    <span className="font-extrabold text-[11px] uppercase tracking-wider opacity-90">
+                      {msg.sender === 'user' ? 'You' : 'FinSight AI Analyst'}
+                    </span>
+                    <span className="text-[10px] opacity-75">{msg.timestamp}</span>
+                  </div>
+
+                  {/* Message Body with Interactive Markdown & Citation Badges */}
+                  <div className="text-xs sm:text-sm font-normal leading-relaxed">
+                    {msg.sender === 'assistant' ? (
+                      <RichMarkdownRenderer
+                        content={msg.text}
+                        sources={msg.sources}
+                        onOpenSourceModal={(s) => setActiveSourceModal(s)}
+                      />
+                    ) : (
+                      <div className="whitespace-pre-wrap">{msg.text}</div>
+                    )}
                   </div>
 
                   {/* AI Response Sources & Action Toolbar */}
                   {msg.sender === 'assistant' && (
-                    <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800/60 space-y-3">
-                      {/* Clickable Source Cards */}
+                    <div className="space-y-3">
+                      {/* Compact Deduplicated Citations Accordion */}
                       {msg.sources && msg.sources.length > 0 && (
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                            <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                            <span>Verified Citations & Sources (Click to View Snippet):</span>
-                          </span>
-
-                          <div className="flex flex-wrap gap-2">
-                            {msg.sources.map((src, idx) => (
-                              <button
-                                key={idx}
-                                onClick={() => setActiveSourceModal(src)}
-                                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 hover:bg-emerald-500/5 text-slate-700 dark:text-slate-300 transition-all text-[11px] font-semibold flex items-center gap-2 cursor-pointer shadow-sm group"
-                              >
-                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">
-                                  Page {src.page_number}
-                                </span>
-                                <span className="truncate max-w-[120px]">{src.section}</span>
-                                <Eye className="w-3 h-3 text-slate-400 group-hover:text-emerald-500 flex-shrink-0" />
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                        <CitationsAccordion
+                          sources={msg.sources}
+                          onOpenModal={(s) => setActiveSourceModal(s)}
+                        />
                       )}
 
                       {/* Action Toolbar: Copy & Regenerate */}
-                      <div className="flex items-center justify-between pt-1 text-[11px]">
-                        <span className="text-slate-400 text-[10px]">{msg.timestamp}</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleCopyText(msg.id, msg.text)}
-                            className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors"
-                            title="Copy formatted answer"
-                          >
-                            {copiedMsgId === msg.id ? (
-                              <>
-                                <Check className="w-3 h-3 text-emerald-500" />
-                                <span className="text-emerald-500 font-bold">Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="w-3 h-3" />
-                                <span>Copy</span>
-                              </>
-                            )}
-                          </button>
+                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/40 dark:border-slate-800/40">
+                        <button
+                          onClick={() => handleCopyText(msg.id, msg.text)}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors text-[11px] font-semibold"
+                          title="Copy formatted answer"
+                        >
+                          {copiedMsgId === msg.id ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-500" />
+                              <span className="text-emerald-500 font-bold">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
 
-                          <button
-                            onClick={handleRegenerate}
-                            disabled={loading}
-                            className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
-                            title="Regenerate AI answer"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            <span>Regenerate</span>
-                          </button>
-                        </div>
+                        <button
+                          onClick={handleRegenerate}
+                          disabled={isGenerating}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 text-[11px] font-semibold"
+                          title="Regenerate AI answer"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          <span>Regenerate</span>
+                        </button>
                       </div>
                     </div>
                   )}
                 </div>
+
+                {msg.sender === 'user' && (
+                  <div className="w-9 h-9 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center flex-shrink-0 shadow-xs">
+                    <User className="w-4 h-4" />
+                  </div>
+                )}
               </div>
             ))
           ) : (
@@ -611,7 +987,7 @@ export const AnalystPage: React.FC = () => {
           )}
 
           {/* Typing Indicator */}
-          {loading && (
+          {isGenerating && (
             <div className="flex gap-3 max-w-xl">
               <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center flex-shrink-0 border border-emerald-500/20">
                 <Bot className="w-4 h-4 animate-pulse text-emerald-500" />
@@ -629,50 +1005,46 @@ export const AnalystPage: React.FC = () => {
             </div>
           )}
 
-          {/* Error State Display */}
-          {errorState && (
-            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                <span>{errorState}</span>
-              </div>
-              <button
-                onClick={handleRegenerate}
-                className="px-3 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Retry</span>
-              </button>
-            </div>
-          )}
-
           <div ref={messagesEndRef} />
         </div>
 
-        {/* BOTTOM PANEL: Multiline Input & Send Controls */}
+        {/* BOTTOM PANEL: Single-Line Truncated Input & Solid Contrast Send / Stop Button */}
         <div className="p-3 sm:p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg space-y-2">
-          <div className="flex items-end gap-2">
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              placeholder={
-                selectedReportId
-                  ? `Ask anything about ${activeReport?.companyName || activeReport?.company_name || 'this report'}...`
-                  : 'Upload a financial report PDF to begin Q&A...'
-              }
-              value={queryText}
-              onChange={handleTextareaInput}
-              onKeyDown={handleTextareaKeyDown}
-              className="flex-1 px-4 py-2.5 bg-transparent text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none resize-none min-h-[44px]"
-            />
-            <button
-              onClick={() => handleSendQuery(queryText)}
-              disabled={!queryText.trim() || loading}
-              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 disabled:opacity-40 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-500/20 flex-shrink-0 h-[44px]"
-            >
-              <span>Send</span>
-              <Send className="w-3.5 h-3.5" />
-            </button>
+          <div className="flex items-center gap-2.5">
+            <div className="flex-1 min-w-0">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                placeholder={
+                  selectedReportId
+                    ? `Ask a question about ${reportTitle}...`
+                    : 'Upload a report PDF to begin AI Q&A...'
+                }
+                value={queryText}
+                onChange={handleTextareaInput}
+                onKeyDown={handleTextareaKeyDown}
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all resize-none min-h-[46px] truncate"
+              />
+            </div>
+            {isGenerating ? (
+              <button
+                onClick={handleStopResponse}
+                className="px-5 py-3 rounded-2xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-rose-600/20 flex-shrink-0 h-[46px]"
+                title="Stop generating AI response"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSendQuery(queryText)}
+                disabled={!queryText.trim()}
+                className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-600/20 flex-shrink-0 h-[46px]"
+              >
+                <span>Send</span>
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="flex items-center justify-between px-2 text-[10px] text-slate-400">
