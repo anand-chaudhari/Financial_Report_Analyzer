@@ -32,6 +32,7 @@ import {
   ShieldCheck,
   CheckCircle2,
 } from 'lucide-react';
+import { FinancialOverviewSection } from '../components/financial/FinancialOverviewSection';
 
 export const ReportAnalysisPage: React.FC = () => {
   const { reportId } = useParams<{ reportId: string }>();
@@ -401,6 +402,16 @@ export const ReportAnalysisPage: React.FC = () => {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {reportId && (
+            <div className="pt-2">
+              <FinancialOverviewSection
+                reportId={reportId}
+                companyName={report?.company_name}
+                financialYear={report?.fiscal_period}
+              />
             </div>
           )}
         </div>

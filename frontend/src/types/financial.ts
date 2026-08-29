@@ -69,6 +69,34 @@ export interface FinancialChartData {
   extracted_at?: string;
 }
 
+export interface OverviewMetricItem {
+  name: string;
+  fy2025_value?: string;
+  fy2026_value?: string;
+  growth?: string;
+  unit?: string;
+  page_number?: number;
+  is_available?: boolean;
+}
+
+export interface FinancialOverviewData {
+  report_id: string;
+  company_name: string;
+  currency: string;
+  has_data: boolean;
+  reporting_periods: string[];
+  revenue: OverviewMetricItem;
+  net_profit: OverviewMetricItem;
+  eps: OverviewMetricItem;
+  total_assets: OverviewMetricItem;
+  total_liabilities: OverviewMetricItem;
+  equity: OverviewMetricItem;
+  cash_flow: OverviewMetricItem;
+  important_ratios: OverviewMetricItem[];
+  executive_overview?: string;
+  extracted_at?: string;
+}
+
 export interface SourceMetadata {
   page_number: number;
   section: string;

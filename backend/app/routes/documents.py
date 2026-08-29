@@ -3,12 +3,14 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from ..api.deps import get_current_user
 from ..services.document_service import DocumentService
 from ..services.summary_service import SummaryService
+from ..services.financial_service import FinancialService
 from ..schemas.document_schema import (
     DocumentUploadResponse,
     DocumentListResponse,
     DocumentMetadata,
 )
 from ..schemas.summary_schema import DocumentSummaryResponse
+from ..schemas.financial_schema import FinancialOverviewResponse
 from ..utils.helpers import sanitize_filename
 from ..config import get_settings
 from ..utils.logger import setup_logger
@@ -18,6 +20,7 @@ logger = setup_logger(__name__)
 router = APIRouter(prefix="/documents", tags=["Documents"])
 document_service = DocumentService()
 summary_service = SummaryService()
+financial_service = FinancialService()
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -221,6 +224,26 @@ async def generate_document_summary(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate document summary: {str(e)}"
+        )
+
+
+@router.get("/{document_id}/overview", response_model=FinancialOverviewResponse)
+async def get_document_financial_overview(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Feature 2: Automatic Financial Report Overview comparing FY2025 vs FY2026.
+    Extracts only metrics reported in the PDF filing.
+    """
+    user_id = current_user["uid"]
+    try:
+        return financial_service.get_financial_overview(report_id=document_id, user_id=user_id)
+    except Exception as e:
+        logger.error(f"Error generating financial overview for '{document_id}': {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate financial overview: {str(e)}"
         )
 
 

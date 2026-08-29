@@ -16,6 +16,7 @@ import {
   Search,
   BookOpen,
 } from 'lucide-react';
+import { FinancialOverviewSection } from '../components/financial/FinancialOverviewSection';
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
@@ -42,6 +43,9 @@ export const DashboardPage: React.FC = () => {
   });
 
   const totalPagesCount = reports.reduce((acc, r) => acc + (r.pageCount || r.total_pages || 0), 0);
+  const [selectedReportId, setSelectedReportId] = useState<string>('');
+  const activeReportId = selectedReportId || reports[0]?.id || '';
+  const activeReport = reports.find((r) => r.id === activeReportId);
 
   return (
     <div className="space-y-8 animate-fade-in w-full min-w-0">
@@ -109,6 +113,43 @@ export const DashboardPage: React.FC = () => {
           color="violet"
         />
       </div>
+
+      {/* Feature 2: Automatic Financial Report Summary & Overview Section */}
+      {reports.length > 0 && activeReportId && (
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-emerald-500" />
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+                Filing Financial Overview
+              </h2>
+            </div>
+            {reports.length > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Select Report:</span>
+                <select
+                  value={activeReportId}
+                  onChange={(e) => setSelectedReportId(e.target.value)}
+                  className="px-3.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-900 dark:text-white cursor-pointer"
+                >
+                  {reports.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.companyName || r.company_name || r.filename} ({r.financialYear || r.fiscal_period || 'Report'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <FinancialOverviewSection
+            reportId={activeReportId}
+            companyName={activeReport?.companyName || activeReport?.company_name}
+            financialYear={activeReport?.financialYear || activeReport?.fiscal_period}
+            onOpenCitation={(pg) => navigate(`/analyst?doc=${activeReportId}&page=${pg}`)}
+          />
+        </div>
+      )}
 
       {/* Recent Reports Section */}
       <div className="space-y-5">

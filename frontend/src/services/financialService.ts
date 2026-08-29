@@ -1,5 +1,6 @@
 import apiClient from './api';
 import { ApiResponse, FinancialSummary, FinancialChartData } from '../types';
+import { FinancialOverviewData } from '../types/financial';
 
 export const financialService = {
   async getSummary(reportId: string): Promise<ApiResponse<FinancialSummary>> {
@@ -10,5 +11,16 @@ export const financialService = {
   async getChartData(reportId: string): Promise<ApiResponse<FinancialChartData>> {
     const response = await apiClient.get<ApiResponse<FinancialChartData>>(`/financials/${reportId}/charts`);
     return response.data;
+  },
+
+  async getFinancialOverview(reportId: string): Promise<FinancialOverviewData> {
+    try {
+      const response = await apiClient.get<ApiResponse<FinancialOverviewData>>(`/financials/${reportId}/overview`);
+      return response.data.data;
+    } catch (e) {
+      // Fallback endpoint
+      const response = await apiClient.get<FinancialOverviewData>(`/documents/${reportId}/overview`);
+      return response.data;
+    }
   },
 };

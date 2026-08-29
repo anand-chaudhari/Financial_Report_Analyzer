@@ -5,6 +5,7 @@ from ..services.financial_service import FinancialService
 from ..schemas.financial_schema import (
     FinancialSummaryResponse,
     FinancialChartDataResponse,
+    FinancialOverviewResponse,
 )
 from ..schemas.common_schema import ApiResponse
 
@@ -39,4 +40,22 @@ async def get_financial_charts(
         success=True,
         message="Financial chart metrics extracted successfully.",
         data=chart_data,
+    )
+
+
+@router.get("/{report_id}/overview", response_model=ApiResponse[FinancialOverviewResponse])
+async def get_financial_overview(
+    report_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Feature 2: Extracts automatic grounded Financial Overview comparing FY2025 vs FY2026.
+    Extracts only numbers actually available in the report. Missing values default to 'Not available in the report'.
+    """
+    user_id = current_user["uid"]
+    overview = financial_service.get_financial_overview(report_id=report_id, user_id=user_id)
+    return ApiResponse(
+        success=True,
+        message="Grounded financial overview generated successfully.",
+        data=overview,
     )

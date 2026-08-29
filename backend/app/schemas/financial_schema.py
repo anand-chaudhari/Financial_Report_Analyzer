@@ -88,3 +88,32 @@ class FinancialChartDataResponse(BaseModel):
     @property
     def operating_expenses_chart(self) -> List[MetricDataPoint]:
         return self.expense_chart
+
+
+class OverviewMetricItem(BaseModel):
+    name: str
+    fy2025_value: Optional[str] = "Not available in the report"
+    fy2026_value: Optional[str] = "Not available in the report"
+    growth: Optional[str] = "Not available in the report"
+    unit: Optional[str] = None
+    page_number: Optional[int] = None
+    is_available: bool = True
+
+
+class FinancialOverviewResponse(BaseModel):
+    report_id: str
+    company_name: str
+    currency: str = "USD"
+    has_data: bool = True
+    reporting_periods: List[str] = Field(default_factory=lambda: ["FY2025", "FY2026"])
+    revenue: OverviewMetricItem
+    net_profit: OverviewMetricItem
+    eps: OverviewMetricItem
+    total_assets: OverviewMetricItem
+    total_liabilities: OverviewMetricItem
+    equity: OverviewMetricItem
+    cash_flow: OverviewMetricItem
+    important_ratios: List[OverviewMetricItem] = Field(default_factory=list)
+    executive_overview: str = ""
+    extracted_at: datetime = Field(default_factory=datetime.utcnow)
+
