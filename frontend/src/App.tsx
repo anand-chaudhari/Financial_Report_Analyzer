@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ 
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const UploadPage = lazy(() => import('./pages/UploadPage').then((m) => ({ default: m.UploadPage })));
 const AnalystPage = lazy(() => import('./pages/AnalystPage').then((m) => ({ default: m.AnalystPage })));
+const ComparePage = lazy(() => import('./pages/ComparePage').then((m) => ({ default: m.ComparePage })));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })));
 const ChatHistoryPage = lazy(() => import('./pages/ChatHistoryPage').then((m) => ({ default: m.ChatHistoryPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
@@ -65,6 +66,14 @@ export const App: React.FC = () => {
                     element={
                       <ProtectedRoute>
                         <AnalystPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/compare"
+                    element={
+                      <ProtectedRoute>
+                        <ComparePage />
                       </ProtectedRoute>
                     }
                   />

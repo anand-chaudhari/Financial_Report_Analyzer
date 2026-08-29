@@ -5,6 +5,7 @@ from .documents import router as documents_router
 from .chat import router as chat_router
 from .conversations import router as conversations_router
 from .financials import router as financials_router
+from .compare import router as compare_router
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -15,3 +16,4 @@ api_router.include_router(reports_router)
 api_router.include_router(chat_router)
 api_router.include_router(conversations_router)
 api_router.include_router(financials_router)
+api_router.include_router(compare_router)

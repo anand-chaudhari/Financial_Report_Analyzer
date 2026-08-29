@@ -3,6 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useReportContext } from '../context/ReportContext';
 import { chatService } from '../services/chatService';
 import { conversationService, ConversationItem, SourceMetadata } from '../services/conversationService';
+import { PdfSplitViewer } from '../components/pdf/PdfSplitViewer';
+import { exportToExcel, exportToPdfBrief, exportToPresentationDeck } from '../services/exportService';
 import {
   Bot,
   Send,
@@ -26,6 +28,12 @@ import {
   Plus,
   Edit3,
   Square,
+  FileText,
+  Download,
+  FileSpreadsheet,
+  Printer,
+  Presentation,
+  Columns,
 } from 'lucide-react';
 
 interface MessageUIItem {
@@ -378,6 +386,9 @@ export const AnalystPage: React.FC = () => {
   const [messages, setMessages] = useState<MessageUIItem[]>([]);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [activeSourceModal, setActiveSourceModal] = useState<SourceMetadata | null>(null);
+  const [isPdfSplitOpen, setIsPdfSplitOpen] = useState<boolean>(false);
+  const [splitHighlightSource, setSplitHighlightSource] = useState<SourceMetadata | null>(null);
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
 
   // Rename Conversation Modal state
   const [editingConvModal, setEditingConvModal] = useState<ConversationItem | null>(null);
@@ -386,6 +397,12 @@ export const AnalystPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleOpenSourceModal = (s: SourceMetadata) => {
+    setSplitHighlightSource(s);
+    setIsPdfSplitOpen(true);
+    setActiveSourceModal(s);
+  };
 
   const handleStopResponse = () => {
     if (abortControllerRef.current) {
@@ -865,6 +882,83 @@ export const AnalystPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Split PDF Viewer Toggle Button */}
+            <button
+              onClick={() => setIsPdfSplitOpen(!isPdfSplitOpen)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                isPdfSplitOpen
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-extrabold shadow-sm'
+                  : 'bg-slate-100 dark:bg-slate-800 hover:bg-emerald-500/10 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+              }`}
+              title="Toggle Live In-Document PDF Split View"
+            >
+              <Columns className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{isPdfSplitOpen ? 'Hide PDF Split' : 'PDF Split View'}</span>
+            </button>
+
+            {/* Export Suite Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-500/10 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Institutional Export Suite"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Export</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {showExportMenu && (
+                <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl py-2 z-50 animate-fade-in text-xs">
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      exportToExcel({
+                        companyName: activeReport?.companyName || 'Corporate Filing',
+                        financialYear: activeReport?.financialYear || 'FY2026',
+                        conversationHistory: messages.map((m) => ({ role: m.sender, content: m.text, sources: m.sources })),
+                      });
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-slate-700 dark:text-slate-200 hover:bg-emerald-500/10 hover:text-emerald-600 flex items-center gap-2 font-medium"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+                    <span>Export Excel Model (.csv)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      exportToPdfBrief({
+                        companyName: activeReport?.companyName || 'Corporate Filing',
+                        financialYear: activeReport?.financialYear || 'FY2026',
+                        summaryText: messages.find((m) => m.sender === 'assistant')?.text || '',
+                        conversationHistory: messages.map((m) => ({ role: m.sender, content: m.text, sources: m.sources })),
+                      });
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-slate-700 dark:text-slate-200 hover:bg-blue-500/10 hover:text-blue-600 flex items-center gap-2 font-medium"
+                  >
+                    <Printer className="w-4 h-4 text-blue-500" />
+                    <span>CFO Executive Brief (PDF)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      exportToPresentationDeck({
+                        companyName: activeReport?.companyName || 'Corporate Filing',
+                        financialYear: activeReport?.financialYear || 'FY2026',
+                        summaryText: messages.find((m) => m.sender === 'assistant')?.text || '',
+                      });
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-slate-700 dark:text-slate-200 hover:bg-purple-500/10 hover:text-purple-600 flex items-center gap-2 font-medium"
+                  >
+                    <Presentation className="w-4 h-4 text-purple-500" />
+                    <span>Board Slide Deck (.json)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {messages.length > 0 && (
               <button
                 onClick={handleClearConversation}
@@ -878,60 +972,62 @@ export const AnalystPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Conversation Message Stream with Distinct User/AI Separation */}
-        <div className="flex-1 min-h-[460px] max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
-          {messages.length > 0 ? (
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex gap-3.5 ${
-                  msg.sender === 'user' ? 'justify-end' : 'justify-start'
-                }`}
-              >
-                {msg.sender === 'assistant' && (
-                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/20 shadow-xs">
-                    <Bot className="w-4 h-4" />
-                  </div>
-                )}
-
+        {/* Live Side-by-Side Flex Container */}
+        <div className="flex flex-col lg:flex-row gap-4 min-h-[460px] items-stretch">
+          {/* Conversation Message Stream with Distinct User/AI Separation */}
+          <div className="flex-1 min-w-0 max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+            {messages.length > 0 ? (
+              messages.map((msg) => (
                 <div
-                  className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm min-w-0 ${
-                    msg.sender === 'user'
-                      ? 'bg-emerald-600 dark:bg-emerald-600 text-white rounded-tr-none max-w-xl ml-auto'
-                      : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none max-w-3xl w-full'
+                  key={msg.id}
+                  className={`flex gap-3.5 ${
+                    msg.sender === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
-                  {/* Message Header/Sender Title */}
-                  <div className="flex items-center justify-between gap-2 border-b pb-2 border-emerald-500/30 dark:border-slate-800/80">
-                    <span className="font-extrabold text-[11px] uppercase tracking-wider opacity-90">
-                      {msg.sender === 'user' ? 'You' : 'FinSight AI Analyst'}
-                    </span>
-                    <span className="text-[10px] opacity-75">{msg.timestamp}</span>
-                  </div>
-
-                  {/* Message Body with Interactive Markdown & Citation Badges */}
-                  <div className="text-xs sm:text-sm font-normal leading-relaxed">
-                    {msg.sender === 'assistant' ? (
-                      <RichMarkdownRenderer
-                        content={msg.text}
-                        sources={msg.sources}
-                        onOpenSourceModal={(s) => setActiveSourceModal(s)}
-                      />
-                    ) : (
-                      <div className="whitespace-pre-wrap">{msg.text}</div>
-                    )}
-                  </div>
-
-                  {/* AI Response Sources & Action Toolbar */}
                   {msg.sender === 'assistant' && (
-                    <div className="space-y-3">
-                      {/* Compact Deduplicated Citations Accordion */}
-                      {msg.sources && msg.sources.length > 0 && (
-                        <CitationsAccordion
+                    <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/20 shadow-xs">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                  )}
+
+                  <div
+                    className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm min-w-0 ${
+                      msg.sender === 'user'
+                        ? 'bg-emerald-600 dark:bg-emerald-600 text-white rounded-tr-none max-w-xl ml-auto'
+                        : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none max-w-3xl w-full'
+                    }`}
+                  >
+                    {/* Message Header/Sender Title */}
+                    <div className="flex items-center justify-between gap-2 border-b pb-2 border-emerald-500/30 dark:border-slate-800/80">
+                      <span className="font-extrabold text-[11px] uppercase tracking-wider opacity-90">
+                        {msg.sender === 'user' ? 'You' : 'FinSight AI Analyst'}
+                      </span>
+                      <span className="text-[10px] opacity-75">{msg.timestamp}</span>
+                    </div>
+
+                    {/* Message Body with Interactive Markdown & Citation Badges */}
+                    <div className="text-xs sm:text-sm font-normal leading-relaxed">
+                      {msg.sender === 'assistant' ? (
+                        <RichMarkdownRenderer
+                          content={msg.text}
                           sources={msg.sources}
-                          onOpenModal={(s) => setActiveSourceModal(s)}
+                          onOpenSourceModal={(s) => handleOpenSourceModal(s)}
                         />
+                      ) : (
+                        <div className="whitespace-pre-wrap">{msg.text}</div>
                       )}
+                    </div>
+
+                    {/* AI Response Sources & Action Toolbar */}
+                    {msg.sender === 'assistant' && (
+                      <div className="space-y-3">
+                        {/* Compact Deduplicated Citations Accordion */}
+                        {msg.sources && msg.sources.length > 0 && (
+                          <CitationsAccordion
+                            sources={msg.sources}
+                            onOpenModal={(s) => handleOpenSourceModal(s)}
+                          />
+                        )}
 
                       {/* Action Toolbar: Copy & Regenerate */}
                       <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/40 dark:border-slate-800/40">
@@ -1055,6 +1151,17 @@ export const AnalystPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* RIGHT PANEL: Interactive In-Document PDF Split View */}
+      {isPdfSplitOpen && (
+        <PdfSplitViewer
+          documentId={activeReport?.id || ''}
+          fileName={activeReport?.fileName || activeReport?.companyName || 'Financial Filing.pdf'}
+          storageUrl={activeReport?.storageUrl}
+          highlightSource={splitHighlightSource}
+          onClose={() => setIsPdfSplitOpen(false)}
+        />
+      )}
 
       {/* SOURCE CITATION MODAL */}
       {activeSourceModal && (

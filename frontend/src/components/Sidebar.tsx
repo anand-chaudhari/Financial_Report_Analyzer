@@ -33,6 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
     },
     { to: '/upload', label: 'Upload Report', icon: UploadCloud },
     { to: '/analyst', label: 'AI Analyst', icon: Bot, isNew: true },
+    { to: '/compare', label: 'Compare Filings', icon: Scale },
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
     { to: '/history', label: 'Chat History', icon: MessageSquare },
     { to: '/settings', label: 'Settings', icon: Settings },

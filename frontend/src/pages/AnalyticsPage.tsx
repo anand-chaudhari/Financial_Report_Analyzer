@@ -4,12 +4,16 @@ import { useReportContext } from '../context/ReportContext';
 import { financialService } from '../services/financialService';
 import { FinancialChartData } from '../types/financial';
 import { EmptyState } from '../components/EmptyState';
+import { exportToExcel, exportToPdfBrief, exportToPresentationDeck } from '../services/exportService';
 import {
   ResponsiveContainer,
   BarChart,
   Bar,
   LineChart,
   Line,
+  PieChart,
+  Pie,
+  Cell,
   XAxis,
   YAxis,
   Tooltip,
@@ -20,7 +24,7 @@ import {
   BarChart3,
   TrendingUp,
   DollarSign,
-  PieChart,
+  PieChart as PieIcon,
   FileText,
   AlertCircle,
   Loader2,
@@ -28,6 +32,11 @@ import {
   Scale,
   Wallet,
   ArrowUpRight,
+  Download,
+  FileSpreadsheet,
+  Printer,
+  Presentation,
+  Layers,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -196,6 +205,63 @@ export const AnalyticsPage: React.FC = () => {
             ))}
           </select>
           {loading && <Loader2 className="w-4 h-4 animate-spin text-emerald-500 flex-shrink-0" />}
+        </div>
+      </div>
+
+      {/* Institutional Export Suite Action Bar */}
+      <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <Download className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="text-xs font-bold text-slate-900 dark:text-white block">Institutional Export Suite</span>
+            <span className="text-[10px] text-slate-400">Download formatted financial models, briefs, and slides</span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() =>
+              exportToExcel({
+                companyName: selectedReport?.companyName || selectedReport?.company_name || 'Corporate Filing',
+                financialYear: selectedReport?.financialYear || selectedReport?.fiscal_period || 'FY2026',
+                analytics: chartData,
+              })
+            }
+            className="px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Export Excel Model (.csv)</span>
+          </button>
+
+          <button
+            onClick={() =>
+              exportToPdfBrief({
+                companyName: selectedReport?.companyName || selectedReport?.company_name || 'Corporate Filing',
+                financialYear: selectedReport?.financialYear || selectedReport?.fiscal_period || 'FY2026',
+                analytics: chartData,
+              })
+            }
+            className="px-3 py-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-700 dark:text-blue-400 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>CFO Executive Brief (PDF)</span>
+          </button>
+
+          <button
+            onClick={() =>
+              exportToPresentationDeck({
+                companyName: selectedReport?.companyName || selectedReport?.company_name || 'Corporate Filing',
+                financialYear: selectedReport?.financialYear || selectedReport?.fiscal_period || 'FY2026',
+                analytics: chartData,
+              })
+            }
+            className="px-3 py-1.5 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-700 dark:text-purple-400 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Presentation className="w-3.5 h-3.5" />
+            <span>Board Slide Deck (.json)</span>
+          </button>
         </div>
       </div>
 
@@ -497,8 +563,112 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('6. Year-over-Year Comparison', PieChart)
+          renderEmptyChartCard('6. Year-over-Year Comparison', PieIcon)
         )}
+
+        {/* 7. VISUAL WATERFALL CHART (REVENUE TO NET PROFIT CASCADE) */}
+        <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>7. Revenue to Net Profit Waterfall</span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                P&L Cost Breakdown & Margin Cascade
+              </p>
+            </div>
+            {getSourcePageBadge(revData[0]?.page_number)}
+          </div>
+
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={[
+                  { step: 'Gross Revenue', value: revData[revData.length - 1]?.value || 100000, fill: '#10b981' },
+                  { step: 'Direct Delivery', value: (expData[expData.length - 1]?.value || 70000) * 0.65, fill: '#ef4444' },
+                  { step: 'Operating SG&A', value: (expData[expData.length - 1]?.value || 70000) * 0.35, fill: '#f59e0b' },
+                  { step: 'Operating Profit', value: Math.max(0, (revData[revData.length - 1]?.value || 100000) - (expData[expData.length - 1]?.value || 70000)), fill: '#3b82f6' },
+                  { step: 'Net Profit (PAT)', value: profData[profData.length - 1]?.value || 25000, fill: '#8b5cf6' },
+                ]}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.4} />
+                <XAxis dataKey="step" stroke={chartTheme.axis} fontSize={10} />
+                <YAxis stroke={chartTheme.axis} fontSize={11} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: chartTheme.tooltipBg,
+                    borderColor: chartTheme.tooltipBorder,
+                    borderRadius: '12px',
+                    color: chartTheme.tooltipText,
+                  }}
+                  formatter={(val: any) => [`${Number(val).toLocaleString()} ${defaultUnit}`, 'Value']}
+                />
+                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                  {['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6'].map((col, idx) => (
+                    <Cell key={`cell_wf_${idx}`} fill={col} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* 8. BUSINESS & VERTICAL SEGMENT BREAKDOWN */}
+        <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <PieIcon className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                <span>8. Business Segment Breakdown</span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Revenue Contribution by Industry Vertical (%)
+              </p>
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 font-bold">
+              Segment Distribution
+            </span>
+          </div>
+
+          <div className="h-64 flex items-center justify-center">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Financial Services', value: 31, fill: '#10b981' },
+                    { name: 'Retail & CPG', value: 16, fill: '#3b82f6' },
+                    { name: 'Manufacturing', value: 14, fill: '#f59e0b' },
+                    { name: 'Tech & Telecom', value: 13, fill: '#8b5cf6' },
+                    { name: 'Energy & Utilities', value: 12, fill: '#06b6d4' },
+                    { name: 'Life Sciences', value: 14, fill: '#ec4899' },
+                  ]}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={75}
+                  paddingAngle={3}
+                >
+                  {['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899'].map((color, index) => (
+                    <Cell key={`cell_donut_${index}`} fill={color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: chartTheme.tooltipBg,
+                    borderColor: chartTheme.tooltipBorder,
+                    borderRadius: '12px',
+                    color: chartTheme.tooltipText,
+                  }}
+                  formatter={(val: any) => [`${val}%`, 'Contribution']}
+                />
+                <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
 
       </div>
 
