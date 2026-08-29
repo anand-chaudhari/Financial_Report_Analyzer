@@ -18,9 +18,15 @@ import {
 
 interface HeaderProps {
   onToggleMobileSidebar?: () => void;
+  onToggleDesktopSidebar?: () => void;
+  sidebarCollapsed?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar }) => {
+export const Header: React.FC<HeaderProps> = ({
+  onToggleMobileSidebar,
+  onToggleDesktopSidebar,
+  sidebarCollapsed,
+}) => {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
@@ -66,18 +72,32 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileSidebar }) => {
   return (
     <header className="sticky top-0 z-40 w-full h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 transition-colors duration-200">
       <div className="h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
-        {/* Left: Mobile Toggle & Workspace Indicator (Duplicate search bar removed) */}
-        <div className="flex items-center gap-3">
+        {/* Left: Sidebar Toggles & Workspace Indicator */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Mobile hamburger */}
           <button
             onClick={onToggleMobileSidebar}
             className="p-2 rounded-xl text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-900 md:hidden cursor-pointer"
-            aria-label="Toggle navigation menu"
+            aria-label="Toggle mobile menu"
+            title="Menu"
           >
             <Menu className="w-5 h-5" />
           </button>
 
+          {/* Desktop collapse toggle */}
+          {onToggleDesktopSidebar && (
+            <button
+              onClick={onToggleDesktopSidebar}
+              className="p-2 rounded-xl text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-900 hidden md:flex items-center justify-center cursor-pointer transition-colors"
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label="Toggle sidebar collapse"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+          )}
+
           <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 hidden sm:inline-block">
+            <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
               Financial Report Intelligence Workspace
             </span>
           </div>
