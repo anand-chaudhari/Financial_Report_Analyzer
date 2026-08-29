@@ -161,3 +161,5 @@ class FinancialService:
                 has_data=False,
                 currency="USD",
             )
+
+    get_financial_analytics = extract_chart_data

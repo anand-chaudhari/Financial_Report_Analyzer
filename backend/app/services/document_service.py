@@ -345,6 +345,8 @@ class DocumentService:
                 return d
         return None
 
+    get_document_by_id = get_document
+
     def list_user_documents(self, user_id: str) -> List[DocumentModel]:
         """Lists all document records belonging to the authenticated user with a 3s timeout fallback."""
         if self.firestore_db:

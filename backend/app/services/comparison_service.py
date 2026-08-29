@@ -4,9 +4,9 @@ Enables side-by-side comparison, variance calculation, and grounded comparative 
 """
 from typing import Dict, Any, Optional, List
 import logging
-from ..services.document_service import DocumentService, get_document_service
-from ..services.financial_service import FinancialAnalyticsService, get_financial_service
-from ..llm.llm_client import GeminiLLMClient, get_llm_client
+from ..services.document_service import DocumentService
+from ..services.financial_service import FinancialService
+from ..llm.llm_client import GeminiLLMClient
 from ..rag.rag_service import RAGService
 
 logger = logging.getLogger("app.services.comparison_service")
@@ -16,12 +16,12 @@ class ComparisonService:
     def __init__(
         self,
         doc_service: Optional[DocumentService] = None,
-        fin_service: Optional[FinancialAnalyticsService] = None,
+        fin_service: Optional[FinancialService] = None,
         llm_client: Optional[GeminiLLMClient] = None,
     ):
-        self.doc_service = doc_service or get_document_service()
-        self.fin_service = fin_service or get_financial_service()
-        self.llm_client = llm_client or get_llm_client()
+        self.doc_service = doc_service or DocumentService()
+        self.fin_service = fin_service or FinancialService()
+        self.llm_client = llm_client or GeminiLLMClient()
         self.rag_service = RAGService()
 
     def compare_documents(
@@ -37,8 +37,8 @@ class ComparisonService:
         """
         logger.info(f"Comparing document '{doc_a_id}' vs '{doc_b_id}' for user '{user_id}'...")
 
-        doc_a = self.doc_service.get_document_by_id(doc_a_id, user_id=user_id)
-        doc_b = self.doc_service.get_document_by_id(doc_b_id, user_id=user_id)
+        doc_a = self.doc_service.get_document(doc_a_id, user_id=user_id)
+        doc_b = self.doc_service.get_document(doc_b_id, user_id=user_id)
 
         meta_a = {
             "id": doc_a_id,
@@ -56,8 +56,11 @@ class ComparisonService:
         }
 
         # 1. Fetch Structured Analytics for both filings
-        analytics_a = self.fin_service.get_financial_analytics(doc_a_id, user_id=user_id)
-        analytics_b = self.fin_service.get_financial_analytics(doc_b_id, user_id=user_id)
+        res_a = self.fin_service.extract_chart_data(doc_a_id, user_id=user_id)
+        res_b = self.fin_service.extract_chart_data(doc_b_id, user_id=user_id)
+
+        analytics_a = res_a.dict() if hasattr(res_a, "dict") else (res_a.model_dump() if hasattr(res_a, "model_dump") else (res_a or {}))
+        analytics_b = res_b.dict() if hasattr(res_b, "dict") else (res_b.model_dump() if hasattr(res_b, "model_dump") else (res_b or {}))
 
         # 2. Extract Key Financial Ratios / Items
         def get_metric_val(analytics_dict: Dict[str, Any], chart_name: str) -> float:
@@ -137,7 +140,7 @@ Summarize leverage, solvency, and liquidity differences.
 ### 4. Strategic Limitations
 State what information remains unavailable from the filings alone."""
 
-        ai_narrative = self.llm_client.generate(
+        ai_narrative = self.llm_client.generate_response(
             prompt=prompt,
             system_instruction="You are an objective financial comparison engine. Output structured markdown.",
             temperature=0.15,
