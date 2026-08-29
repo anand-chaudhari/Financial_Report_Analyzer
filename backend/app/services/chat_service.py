@@ -12,7 +12,10 @@ logger = setup_logger(__name__)
 
 
 class ChatService:
-    """Service orchestrating context-aware chat sessions, intent detection, persistent Firestore conversations, and grounded RAG."""
+    """
+    Context-Aware FinSight AI Chat Service.
+    Implements modular intent classification layer before the existing grounded RAG pipeline.
+    """
 
     def __init__(
         self,
@@ -29,42 +32,61 @@ class ChatService:
         history: List[Dict[str, Any]],
     ) -> str:
         """
-        Determines user intent before answering:
-        1. CONVERSATIONAL (Greetings, Casual, Capabilities, Thanks)
-        2. FINANCIAL_CONCEPT (General finance/accounting definitions without report dependency)
-        3. FOLLOW_UP (Context-dependent follow-up questions referencing prior turn)
-        4. REPORT_NO_DOC (Company/report inquiry but no document uploaded)
-        5. REPORT_RAG (Grounded financial analysis of uploaded corporate filing)
+        Detects user intent before query execution:
+        - GREETING: Greetings, introductory questions, identity, capabilities.
+        - GENERAL_FINANCE: Financial definitions/theories without report dependencies.
+        - INVESTMENT_ANALYSIS: Inquiries about investing, buying/selling stocks.
+        - FOLLOW_UP: Context-dependent follow-up queries referencing prior discussion.
+        - OUT_OF_SCOPE: Non-finance and unrelated conversational queries.
+        - DOCUMENT_QUESTION: Inquiries requiring factual extraction from the uploaded report.
         """
         q_clean = question.strip().lower()
         q_words = re.findall(r"\b\w+\b", q_clean)
 
-        # 1. Greetings, Casual Politeness & Identity
-        greeting_words = {"hi", "hello", "hey", "hola", "greetings"}
+        # 1. GREETING (Greetings, Polite Casual, Identity, Capabilities)
+        greeting_words = {"hi", "hello", "hey", "hola", "greetings", "sup"}
         if len(q_words) <= 3 and any(w in greeting_words for w in q_words):
-            return "CONVERSATIONAL"
+            return "GREETING"
 
         casual_phrases = [
             "good morning", "good afternoon", "good evening", "how are you",
             "who are you", "what can you do", "what is your name", "tell me about yourself",
             "what are your features", "who built you", "thank you", "thanks", "bye", "goodbye",
-            "help me", "what is finsight", "what is finsight ai"
+            "help me", "what is finsight", "what is finsight ai", "what do you do"
         ]
         if any(phrase in q_clean for phrase in casual_phrases):
-            return "CONVERSATIONAL"
+            return "GREETING"
 
-        # 2. Context-Dependent Follow-Up Queries
-        follow_up_triggers = [
-            "what about", "why did it", "why did that", "how about", "and last year",
-            "what about last year", "compare it with", "compare with previous",
-            "why did revenue", "why did profit", "explain that", "what were the risks of that",
-            "how much did it decrease", "how much did it increase", "is it increasing", "why so"
+        # 2. OUT_OF_SCOPE (Completely unrelated topics like weather, cooking, trivia, poetry)
+        out_of_scope_triggers = [
+            "weather", "recipe", "write a poem", "write a song", "tell me a joke",
+            "who won the", "football", "cricket match", "movie recommendation", "sing a song",
+            "translate to french", "translate to spanish", "write a python script to scrape"
         ]
-        if history and (len(q_words) <= 7 or any(trig in q_clean for trig in follow_up_triggers)):
+        if any(t in q_clean for t in out_of_scope_triggers):
+            return "OUT_OF_SCOPE"
+
+        # 3. INVESTMENT_ANALYSIS (Investment suitability, Buy/Sell/Hold questions)
+        investment_triggers = [
+            "can i invest", "should i invest", "is this a good investment", "should i buy",
+            "should i sell", "is this stock good", "is this a growth stock", "buy or sell",
+            "would you recommend investing", "is it safe to invest"
+        ]
+        if any(t in q_clean for t in investment_triggers):
+            return "INVESTMENT_ANALYSIS"
+
+        # 4. FOLLOW_UP (Context-dependent follow-up questions referencing prior turn)
+        follow_up_triggers = [
+            "what about last year", "what about", "why did it", "why did that", "how about",
+            "and last year", "compare it with", "compare with previous", "why did revenue",
+            "why did profit", "explain that", "what were the risks of that", "how much did it decrease",
+            "how much did it increase", "is it increasing", "why so", "and the previous year"
+        ]
+        if history and len(history) > 0:
             if any(trig in q_clean for trig in follow_up_triggers) or q_clean.startswith(("and ", "what about", "why ")):
                 return "FOLLOW_UP"
 
-        # 3. General Finance Concept Questions (No specific company or filing context)
+        # 5. GENERAL_FINANCE (General financial theory, formulas, definitions)
         general_concept_triggers = [
             "what is ebitda", "what is pe ratio", "what is p/e ratio", "explain working capital",
             "what is roe", "what is roa", "what is roce", "what is free cash flow", "what is fcf",
@@ -72,17 +94,14 @@ class ChatService:
             "what is operating margin", "what is debt to equity", "what is current ratio",
             "what is quick ratio", "what is market cap", "what is dividend yield",
             "what is book value", "what is goodwill", "what is depreciation", "what is amortization",
-            "what is cash flow statement", "what is balance sheet", "what is income statement"
+            "what is cash flow statement", "what is balance sheet", "what is income statement",
+            "define ebitda", "formula for ebitda", "how to calculate ebitda", "explain ebitda"
         ]
         if any(trig in q_clean for trig in general_concept_triggers) and "this report" not in q_clean and "this company" not in q_clean:
-            return "FINANCIAL_CONCEPT"
+            return "GENERAL_FINANCE"
 
-        # 4. Report-Specific Query check
-        if not has_active_doc:
-            # If user asks for company/report-specific numbers without a document
-            return "REPORT_NO_DOC"
-
-        return "REPORT_RAG"
+        # 6. DOCUMENT_QUESTION (Default for financial data inquiries)
+        return "DOCUMENT_QUESTION"
 
     def _resolve_follow_up_query(self, question: str, history: List[Dict[str, Any]]) -> str:
         """
@@ -97,7 +116,7 @@ class ChatService:
         for m in reversed(history):
             role = m.get("role") or m.get("sender") or ""
             content = m.get("content") or m.get("text") or ""
-            if role == "assistant" and not last_assistant_msg:
+            if role in ("assistant", "ai") and not last_assistant_msg:
                 last_assistant_msg = content[:200]
             elif role == "user" and not last_user_msg:
                 last_user_msg = content
@@ -117,9 +136,10 @@ class ChatService:
     ) -> ChatResponse:
         """
         Processes user inquiries with intelligent intent routing:
-        - Conversational / Greetings / General Finance Concepts -> direct natural responses (no unnecessary vector search)
-        - Company / Filing Inquiries -> full grounded RAG with verifiable page citations
-        - Context-aware follow-up question resolution
+        - GREETING / GENERAL_FINANCE / OUT_OF_SCOPE -> direct conversational LLM response (no vector search)
+        - DOCUMENT_QUESTION / INVESTMENT_ANALYSIS / FOLLOW_UP:
+          - If report uploaded -> grounded RAG with verifiable page citations
+          - If NO report uploaded -> polite prompt requesting report upload
         """
         # 1. Resolve or Create Conversation Thread
         conv = None
@@ -186,8 +206,8 @@ class ChatService:
 
         # 5. Route Execution Based on Intent
 
-        # Case A: Greetings / Casual / FinSight AI Capabilities
-        if intent == "CONVERSATIONAL":
+        # Case 1: GREETING (Greetings, Identity, Capabilities)
+        if intent == "GREETING":
             ai_answer = self.rag_service.llm_client.generate_response(
                 prompt=question,
                 system_instruction=FINSIGHT_CONVERSATIONAL_SYSTEM_PROMPT,
@@ -197,10 +217,10 @@ class ChatService:
             )
             return self._finalize_response(active_conv_id, user_id, ai_answer, [])
 
-        # Case B: General Financial Concepts (EBITDA, Ratios, Terminology)
-        elif intent == "FINANCIAL_CONCEPT":
+        # Case 2: GENERAL_FINANCE (EBITDA, Ratios, Formulas, Definitions)
+        elif intent == "GENERAL_FINANCE":
             ai_answer = self.rag_service.llm_client.generate_response(
-                prompt=f"Explain the following financial concept clearly and concisely with standard formulas or examples:\n\n{question}",
+                prompt=f"Explain the following financial concept clearly and concisely with standard definitions and formulas:\n\n{question}",
                 system_instruction=FINSIGHT_CONVERSATIONAL_SYSTEM_PROMPT,
                 conversation_history=history_to_supply,
                 temperature=0.2,
@@ -208,15 +228,24 @@ class ChatService:
             )
             return self._finalize_response(active_conv_id, user_id, ai_answer, [])
 
-        # Case C: Company/Report inquiry without an uploaded report
-        elif intent == "REPORT_NO_DOC":
+        # Case 3: OUT_OF_SCOPE (Non-financial topics)
+        elif intent == "OUT_OF_SCOPE":
+            out_of_scope_msg = (
+                "I am FinSight AI, a specialized financial report analysis assistant. "
+                "I focus on corporate filings, balance sheets, income statements, cash flows, and financial metric extraction.\n\n"
+                "Please feel free to ask any financial concept question or upload a corporate filing PDF for in-depth analysis!"
+            )
+            return self._finalize_response(active_conv_id, user_id, out_of_scope_msg, [])
+
+        # Case 4: Document questions without an uploaded document
+        elif not has_real_document:
             prompt_guide = (
-                "To analyze specific company financial metrics, please upload a corporate financial report (PDF) first.\n\n"
-                "Once uploaded, I will parse the balance sheet, profit & loss statement, and cash flows to answer your questions with verified, page-referenced citations."
+                "To analyze specific company financial data or evaluate corporate performance, please upload a financial report (PDF) first.\n\n"
+                "Once uploaded, I will extract verified balance sheet, P&L, and cash flow metrics with exact page citations."
             )
             return self._finalize_response(active_conv_id, user_id, prompt_guide, [])
 
-        # Case D: Grounded RAG Query (or context-aware follow-up)
+        # Case 5: Grounded RAG Pipeline (DOCUMENT_QUESTION, INVESTMENT_ANALYSIS, FOLLOW_UP)
         else:
             rag_query = question
             if intent == "FOLLOW_UP":
@@ -281,70 +310,39 @@ class ChatService:
         text_sources: Optional[List[str]] = None,
         page_list: Optional[List[int]] = None,
         section_list: Optional[List[str]] = None,
-        filtered_chunks: Optional[List[Dict[str, Any]]] = None,
+        filtered_chunks: Optional[List[Dict[str, Any]]] = None
     ) -> ChatResponse:
-        """Saves assistant turn to Firestore and formats ChatResponse."""
-        assistant_msg = self.conv_service.add_message(
+        """
+        Saves the assistant reply to Firestore and builds the standardized ChatResponse schema.
+        """
+        # Save assistant message in Firestore conversation history
+        self.conv_service.add_message(
             conversation_id=conversation_id,
             user_id=user_id,
             role="assistant",
             content=answer,
-            sources=structured_sources
+            pages=page_list or [],
+            sections=section_list or [],
+            sources=structured_sources or []
         )
 
-        citations_list = [
+        citation_objects = [
             Citation(
                 page_number=s.get("page_number", 1),
+                section=s.get("section", "General"),
                 snippet=s.get("snippet", ""),
-                section=s.get("section"),
-                document_name=s.get("document_name")
+                similarity_score=s.get("similarity_score", 1.0)
             )
             for s in structured_sources
         ]
 
-        msg_id = getattr(assistant_msg, "messageId", f"msg_{uuid.uuid4().hex[:12]}") if assistant_msg else f"msg_{uuid.uuid4().hex[:12]}"
-
-        pages = page_list or []
-        sections = section_list or []
-        sources = text_sources or []
-        retrieved = filtered_chunks or []
-
         return ChatResponse(
-            conversationId=conversation_id,
-            messageId=msg_id,
+            conversation_id=conversation_id,
             answer=answer,
-            sources=sources,
-            pages=pages,
-            sections=sections,
-            retrieved_chunks=retrieved,
-            citations=citations_list,
-            is_grounded=bool(pages),
-            source_found=bool(pages),
+            citations=citation_objects,
+            sources=text_sources or [],
+            pages=page_list or [],
+            sections=section_list or [],
+            retrieved_chunks=filtered_chunks or [],
+            is_grounded=len(page_list or []) > 0
         )
-
-    def get_history(self, report_id: str, user_id: str) -> List[ChatMessageItem]:
-        """Retrieves legacy conversation history for a given report/document."""
-        convs = self.conv_service.list_user_conversations(user_id=user_id, document_id=report_id)
-        if not convs:
-            return []
-
-        messages = self.conv_service.get_conversation_messages(conversation_id=convs[0].conversationId, user_id=user_id)
-        return [
-            ChatMessageItem(
-                id=m.messageId,
-                sender=m.role,
-                content=m.content,
-                citations=[
-                    Citation(page_number=s.get("page_number", 1), snippet=s.get("snippet", ""))
-                    for s in m.sources
-                ]
-            )
-            for m in messages
-        ]
-
-    def clear_history(self, report_id: str, user_id: str) -> bool:
-        """Clears conversation history for a report."""
-        convs = self.conv_service.list_user_conversations(user_id=user_id, document_id=report_id)
-        for c in convs:
-            self.conv_service.delete_conversation(conversation_id=c.conversationId, user_id=user_id)
-        return True
