@@ -973,195 +973,199 @@ export const AnalystPage: React.FC = () => {
         </div>
 
         {/* Live Side-by-Side Flex Container */}
-        <div className="flex flex-col lg:flex-row gap-4 min-h-[460px] items-stretch">
-          {/* Conversation Message Stream with Distinct User/AI Separation */}
-          <div className="flex-1 min-w-0 max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
-            {messages.length > 0 ? (
-              messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex gap-3.5 ${
-                    msg.sender === 'user' ? 'justify-end' : 'justify-start'
-                  }`}
-                >
-                  {msg.sender === 'assistant' && (
-                    <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/20 shadow-xs">
-                      <Bot className="w-4 h-4" />
-                    </div>
-                  )}
-
+        <div className="flex flex-col lg:flex-row gap-4 min-h-[460px] items-stretch flex-1">
+          {/* Left Column: Messages Stream & Bottom Input */}
+          <div className="flex-1 flex flex-col min-w-0 space-y-4">
+            {/* Conversation Message Stream with Distinct User/AI Separation */}
+            <div className="flex-1 min-h-[460px] max-h-[620px] overflow-y-auto p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+              {messages.length > 0 ? (
+                messages.map((msg) => (
                   <div
-                    className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm min-w-0 ${
-                      msg.sender === 'user'
-                        ? 'bg-emerald-600 dark:bg-emerald-600 text-white rounded-tr-none max-w-xl ml-auto'
-                        : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none max-w-3xl w-full'
+                    key={msg.id}
+                    className={`flex gap-3.5 ${
+                      msg.sender === 'user' ? 'justify-end' : 'justify-start'
                     }`}
                   >
-                    {/* Message Header/Sender Title */}
-                    <div className="flex items-center justify-between gap-2 border-b pb-2 border-emerald-500/30 dark:border-slate-800/80">
-                      <span className="font-extrabold text-[11px] uppercase tracking-wider opacity-90">
-                        {msg.sender === 'user' ? 'You' : 'FinSight AI Analyst'}
-                      </span>
-                      <span className="text-[10px] opacity-75">{msg.timestamp}</span>
-                    </div>
+                    {msg.sender === 'assistant' && (
+                      <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/20 shadow-xs">
+                        <Bot className="w-4 h-4" />
+                      </div>
+                    )}
 
-                    {/* Message Body with Interactive Markdown & Citation Badges */}
-                    <div className="text-xs sm:text-sm font-normal leading-relaxed">
-                      {msg.sender === 'assistant' ? (
-                        <RichMarkdownRenderer
-                          content={msg.text}
-                          sources={msg.sources}
-                          onOpenSourceModal={(s) => handleOpenSourceModal(s)}
-                        />
-                      ) : (
-                        <div className="whitespace-pre-wrap">{msg.text}</div>
+                    <div
+                      className={`p-4 sm:p-5 rounded-2xl text-xs space-y-3 leading-relaxed shadow-sm min-w-0 ${
+                        msg.sender === 'user'
+                          ? 'bg-emerald-600 dark:bg-emerald-600 text-white rounded-tr-none max-w-xl ml-auto'
+                          : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none max-w-3xl w-full'
+                      }`}
+                    >
+                      {/* Message Header/Sender Title */}
+                      <div className="flex items-center justify-between gap-2 border-b pb-2 border-emerald-500/30 dark:border-slate-800/80">
+                        <span className="font-extrabold text-[11px] uppercase tracking-wider opacity-90">
+                          {msg.sender === 'user' ? 'You' : 'FinSight AI Analyst'}
+                        </span>
+                        <span className="text-[10px] opacity-75">{msg.timestamp}</span>
+                      </div>
+
+                      {/* Message Body with Interactive Markdown & Citation Badges */}
+                      <div className="text-xs sm:text-sm font-normal leading-relaxed">
+                        {msg.sender === 'assistant' ? (
+                          <RichMarkdownRenderer
+                            content={msg.text}
+                            sources={msg.sources}
+                            onOpenSourceModal={(s) => handleOpenSourceModal(s)}
+                          />
+                        ) : (
+                          <div className="whitespace-pre-wrap">{msg.text}</div>
+                        )}
+                      </div>
+
+                      {/* AI Response Sources & Action Toolbar */}
+                      {msg.sender === 'assistant' && (
+                        <div className="space-y-3">
+                          {/* Compact Deduplicated Citations Accordion */}
+                          {msg.sources && msg.sources.length > 0 && (
+                            <CitationsAccordion
+                              sources={msg.sources}
+                              onOpenModal={(s) => handleOpenSourceModal(s)}
+                            />
+                          )}
+
+                          {/* Action Toolbar: Copy & Regenerate */}
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/40 dark:border-slate-800/40">
+                            <button
+                              onClick={() => handleCopyText(msg.id, msg.text)}
+                              className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors text-[11px] font-semibold"
+                              title="Copy formatted answer"
+                            >
+                              {copiedMsgId === msg.id ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-500" />
+                                  <span className="text-emerald-500 font-bold">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copy</span>
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              onClick={handleRegenerate}
+                              disabled={isGenerating}
+                              className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 text-[11px] font-semibold"
+                              title="Regenerate AI answer"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              <span>Regenerate</span>
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
 
-                    {/* AI Response Sources & Action Toolbar */}
-                    {msg.sender === 'assistant' && (
-                      <div className="space-y-3">
-                        {/* Compact Deduplicated Citations Accordion */}
-                        {msg.sources && msg.sources.length > 0 && (
-                          <CitationsAccordion
-                            sources={msg.sources}
-                            onOpenModal={(s) => handleOpenSourceModal(s)}
-                          />
-                        )}
-
-                      {/* Action Toolbar: Copy & Regenerate */}
-                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/40 dark:border-slate-800/40">
-                        <button
-                          onClick={() => handleCopyText(msg.id, msg.text)}
-                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors text-[11px] font-semibold"
-                          title="Copy formatted answer"
-                        >
-                          {copiedMsgId === msg.id ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-500" />
-                              <span className="text-emerald-500 font-bold">Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3" />
-                              <span>Copy</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={handleRegenerate}
-                          disabled={isGenerating}
-                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50 text-[11px] font-semibold"
-                          title="Regenerate AI answer"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          <span>Regenerate</span>
-                        </button>
+                    {msg.sender === 'user' && (
+                      <div className="w-9 h-9 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center flex-shrink-0 shadow-xs">
+                        <User className="w-4 h-4" />
                       </div>
-                    </div>
-                  )}
-                </div>
-
-                {msg.sender === 'user' && (
-                  <div className="w-9 h-9 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center flex-shrink-0 shadow-xs">
-                    <User className="w-4 h-4" />
+                    )}
                   </div>
+                ))
+              ) : (
+                <div className="py-20 text-center space-y-3">
+                  <Bot className="w-14 h-14 text-slate-300 dark:text-slate-700 mx-auto" />
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Start AI Financial Analysis
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                    Ask any question about your selected financial report. Questions, answers, and citations are saved to your analyst workspace.
+                  </p>
+                </div>
+              )}
+
+              {/* Typing Indicator */}
+              {isGenerating && (
+                <div className="flex gap-3 max-w-xl">
+                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center flex-shrink-0 border border-emerald-500/20">
+                    <Bot className="w-4 h-4 animate-pulse text-emerald-500" />
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">
+                      Analyzing report context & generating answer...
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* BOTTOM PANEL: Single-Line Truncated Input & Solid Contrast Send / Stop Button */}
+            <div className="p-3 sm:p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg space-y-2">
+              <div className="flex items-center gap-2.5">
+                <div className="flex-1 min-w-0">
+                  <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    placeholder={
+                      selectedReportId
+                        ? `Ask a question about ${reportTitle}...`
+                        : 'Upload a report PDF to begin AI Q&A...'
+                    }
+                    value={queryText}
+                    onChange={handleTextareaInput}
+                    onKeyDown={handleTextareaKeyDown}
+                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all resize-none min-h-[46px] truncate"
+                  />
+                </div>
+                {isGenerating ? (
+                  <button
+                    onClick={handleStopResponse}
+                    className="px-5 py-3 rounded-2xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-rose-600/20 flex-shrink-0 h-[46px]"
+                    title="Stop generating AI response"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleSendQuery(queryText)}
+                    disabled={!queryText.trim()}
+                    className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-600/20 flex-shrink-0 h-[46px]"
+                  >
+                    <span>Send</span>
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
-            ))
-          ) : (
-            <div className="py-20 text-center space-y-3">
-              <Bot className="w-14 h-14 text-slate-300 dark:text-slate-700 mx-auto" />
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Start AI Financial Analysis
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                Ask any question about your selected financial report. Questions, answers, and citations are saved to your analyst workspace.
-              </p>
-            </div>
-          )}
 
-          {/* Typing Indicator */}
-          {isGenerating && (
-            <div className="flex gap-3 max-w-xl">
-              <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center flex-shrink-0 border border-emerald-500/20">
-                <Bot className="w-4 h-4 animate-pulse text-emerald-500" />
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 flex items-center gap-3">
-                <div className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Analyzing report context & generating answer...
+              <div className="flex items-center justify-between px-2 text-[10px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <CornerDownLeft className="w-3 h-3" /> Press Enter to send, Shift+Enter for new line
                 </span>
+                <span>Grounded AI Intelligence • Verified Page Citations</span>
               </div>
             </div>
+          </div>
+
+          {/* Right Panel: Interactive In-Document PDF Split View */}
+          {isPdfSplitOpen && (
+            <PdfSplitViewer
+              documentId={activeReport?.id || ''}
+              fileName={activeReport?.fileName || activeReport?.companyName || 'Financial Filing.pdf'}
+              storageUrl={activeReport?.storageUrl}
+              highlightSource={splitHighlightSource}
+              onClose={() => setIsPdfSplitOpen(false)}
+            />
           )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* BOTTOM PANEL: Single-Line Truncated Input & Solid Contrast Send / Stop Button */}
-        <div className="p-3 sm:p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg space-y-2">
-          <div className="flex items-center gap-2.5">
-            <div className="flex-1 min-w-0">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                placeholder={
-                  selectedReportId
-                    ? `Ask a question about ${reportTitle}...`
-                    : 'Upload a report PDF to begin AI Q&A...'
-                }
-                value={queryText}
-                onChange={handleTextareaInput}
-                onKeyDown={handleTextareaKeyDown}
-                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all resize-none min-h-[46px] truncate"
-              />
-            </div>
-            {isGenerating ? (
-              <button
-                onClick={handleStopResponse}
-                className="px-5 py-3 rounded-2xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-rose-600/20 flex-shrink-0 h-[46px]"
-                title="Stop generating AI response"
-              >
-                <Square className="w-3.5 h-3.5 fill-current" />
-                <span>Stop</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => handleSendQuery(queryText)}
-                disabled={!queryText.trim()}
-                className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md shadow-emerald-600/20 flex-shrink-0 h-[46px]"
-              >
-                <span>Send</span>
-                <Send className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between px-2 text-[10px] text-slate-400">
-            <span className="flex items-center gap-1">
-              <CornerDownLeft className="w-3 h-3" /> Press Enter to send, Shift+Enter for new line
-            </span>
-            <span>Grounded AI Intelligence • Verified Page Citations</span>
-          </div>
         </div>
       </div>
-
-      {/* RIGHT PANEL: Interactive In-Document PDF Split View */}
-      {isPdfSplitOpen && (
-        <PdfSplitViewer
-          documentId={activeReport?.id || ''}
-          fileName={activeReport?.fileName || activeReport?.companyName || 'Financial Filing.pdf'}
-          storageUrl={activeReport?.storageUrl}
-          highlightSource={splitHighlightSource}
-          onClose={() => setIsPdfSplitOpen(false)}
-        />
-      )}
 
       {/* SOURCE CITATION MODAL */}
       {activeSourceModal && (
