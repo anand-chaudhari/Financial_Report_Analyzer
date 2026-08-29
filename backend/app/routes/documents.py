@@ -104,6 +104,9 @@ async def upload_document(
             financialYear=doc.financialYear,
             pageCount=doc.pageCount,
             status=doc.status,
+            currentStage=doc.currentStage,
+            stageMessage=doc.stageMessage,
+            progressPercent=doc.progressPercent,
             storageUrl=doc.storageUrl,
             uploadedAt=doc.uploadedAt,
             processedAt=doc.processedAt,
@@ -142,6 +145,9 @@ async def list_documents(
             financialYear=d.financialYear,
             pageCount=d.pageCount,
             status=d.status,
+            currentStage=d.currentStage,
+            stageMessage=d.stageMessage,
+            progressPercent=d.progressPercent,
             storageUrl=d.storageUrl,
             uploadedAt=d.uploadedAt,
             processedAt=d.processedAt,
@@ -155,6 +161,46 @@ async def list_documents(
         success=True,
         data=items,
         total=len(items)
+    )
+
+
+@router.get("/{document_id}/status", response_model=DocumentUploadResponse)
+async def get_document_status(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Retrieves live processing stage and progress for a document."""
+    user_id = current_user["uid"]
+    doc = document_service.get_document(document_id=document_id, user_id=user_id)
+
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID '{document_id}' not found."
+        )
+
+    metadata = DocumentMetadata(
+        documentId=doc.documentId,
+        userId=doc.userId,
+        fileName=doc.fileName,
+        companyName=doc.companyName,
+        financialYear=doc.financialYear,
+        pageCount=doc.pageCount,
+        status=doc.status,
+        currentStage=doc.currentStage,
+        stageMessage=doc.stageMessage,
+        progressPercent=doc.progressPercent,
+        storageUrl=doc.storageUrl,
+        uploadedAt=doc.uploadedAt,
+        processedAt=doc.processedAt,
+        fileSize=doc.fileSize,
+        errorMessage=doc.errorMessage,
+    )
+
+    return DocumentUploadResponse(
+        success=True,
+        message=f"Document status: {doc.status} ({doc.currentStage})",
+        data=metadata
     )
 
 
@@ -181,6 +227,9 @@ async def get_document(
         financialYear=doc.financialYear,
         pageCount=doc.pageCount,
         status=doc.status,
+        currentStage=doc.currentStage,
+        stageMessage=doc.stageMessage,
+        progressPercent=doc.progressPercent,
         storageUrl=doc.storageUrl,
         uploadedAt=doc.uploadedAt,
         processedAt=doc.processedAt,

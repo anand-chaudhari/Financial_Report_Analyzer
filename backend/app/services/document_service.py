@@ -145,24 +145,30 @@ class DocumentService:
         document_id = f"doc_{uuid.uuid4().hex[:12]}"
         now_iso = datetime.utcnow().isoformat()
 
-        # Step 1: Create initial record with 'uploaded' status
+        # Step 1: Create initial record with 'Uploading' stage
         doc_model = DocumentModel(
             documentId=document_id,
             userId=user_id,
             fileName=filename,
             fileSize=len(file_bytes),
-            status="uploaded",
+            status="processing",
+            currentStage="Uploading",
+            stageMessage="Uploading document to secure workspace storage",
+            progressPercent=10,
             uploadedAt=now_iso,
             storageUrl=""
         )
         self._save_to_firestore(doc_model)
 
-        try:
-            # Step 2: Update status to 'processing'
-            doc_model.status = "processing"
+        def update_stage(stage_name: str, progress_pct: int, msg: Optional[str] = None):
+            doc_model.currentStage = stage_name
+            doc_model.progressPercent = progress_pct
+            doc_model.stageMessage = msg or f"Stage: {stage_name}"
             self._save_to_firestore(doc_model)
+            logger.info(f"[{filename}] Progress {progress_pct}% -> {stage_name}")
 
-            # Step 3: Store file (Firebase Storage or local uploads directory)
+        try:
+            # Step 2: Store file (Firebase Storage or local uploads directory)
             storage_url = self._store_file(
                 file_bytes=file_bytes,
                 filename=filename,
@@ -171,7 +177,7 @@ class DocumentService:
             )
             doc_model.storageUrl = storage_url
 
-            # Step 4: Extract metadata from PDF bytes
+            # Step 3: Extract metadata from PDF bytes
             page_count, company_name, financial_year, raw_meta = self._extract_pdf_metadata(
                 file_bytes=file_bytes,
                 filename=filename
@@ -182,7 +188,7 @@ class DocumentService:
             doc_model.financialYear = financial_year
             doc_model.metadata = raw_meta
 
-            # Step 5: Execute complete PDF processing pipeline & ChromaDB vector indexing
+            # Step 4: Execute complete PDF processing pipeline with real-time stage updates
             logger.info(f"Running DocumentProcessor pipeline for '{filename}' ({document_id})...")
             proc_result = self.processor.process_pdf(
                 pdf_source=file_bytes,
@@ -191,9 +197,14 @@ class DocumentService:
                 file_name=filename,
                 company_name=company_name,
                 financial_year=financial_year,
+                on_stage_update=update_stage
             )
 
-            # Index chunks into ChromaDB
+            # Stage: Generating embeddings
+            update_stage("Generating embeddings", 75, "Generating financial vector embeddings with MiniLM model")
+
+            # Stage: Indexing
+            update_stage("Indexing", 90, "Inserting semantic chunks into ChromaDB collection")
             indexed_count = self.vector_service.add_document(
                 document_id=document_id,
                 user_id=user_id,
@@ -201,7 +212,11 @@ class DocumentService:
                 overwrite_if_exists=True
             )
 
+            # Stage: Ready
             doc_model.status = "completed"
+            doc_model.currentStage = "Ready"
+            doc_model.stageMessage = f"Report processed and indexed successfully ({page_count} pages, {indexed_count} chunks)."
+            doc_model.progressPercent = 100
             doc_model.processedAt = datetime.utcnow().isoformat()
 
             # Step 6: Save final completed record
@@ -215,7 +230,9 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Failed processing document upload {document_id}: {str(e)}", exc_info=True)
             doc_model.status = "failed"
+            doc_model.currentStage = "Failed"
             doc_model.errorMessage = str(e)
+            doc_model.stageMessage = f"Processing failed: {str(e)}"
             doc_model.processedAt = datetime.utcnow().isoformat()
             self._save_to_firestore(doc_model)
             raise e

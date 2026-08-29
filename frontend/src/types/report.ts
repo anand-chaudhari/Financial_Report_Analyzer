@@ -19,6 +19,11 @@ export interface ReportItem {
   financialYear?: string;
   storage_url?: string;
   storageUrl?: string;
+  currentStage?: string;
+  stageMessage?: string;
+  progressPercent?: number;
+  errorMessage?: string;
+  error_message?: string;
   ticker?: string;
   filingType?: string;
   revenue?: string;

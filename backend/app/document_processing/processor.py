@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union, Optional, Callable
 
 from .pdf_extractor import PDFExtractor, ExtractedPage
 from .cleaner import TextCleaner
@@ -51,6 +51,7 @@ class DocumentProcessor:
         file_name: str = "document.pdf",
         company_name: str = "Unknown Company",
         financial_year: str = "FY2024",
+        on_stage_update: Optional[Callable[[str, int, Optional[str]], None]] = None,
     ) -> ProcessingResult:
         """
         Runs the complete PDF processing pipeline:
@@ -62,13 +63,27 @@ class DocumentProcessor:
         """
         logger.info(f"DocumentProcessor: Processing PDF for document_id='{document_id}', user_id='{user_id}'.")
 
-        # 1. Page Extraction
+        # Stage: Extracting text
+        if on_stage_update:
+            on_stage_update("Extracting text", 20, "Extracting text page-by-page from document")
+
         pages = self.extractor.extract(pdf_source)
         total_pages = len(pages)
         non_empty_pages = sum(1 for p in pages if not p.is_empty)
         scanned_pages = sum(1 for p in pages if p.is_scanned)
 
-        # 2. Chunking & Metadata Generation
+        # Stage: Extracting tables
+        if on_stage_update:
+            on_stage_update("Extracting tables", 35, "Parsing financial statement tables and structural grids")
+
+        # Stage: OCR (only when required)
+        if scanned_pages > 0 and on_stage_update:
+            on_stage_update("OCR (only when required)", 45, f"Running OCR enhancement on {scanned_pages} scanned page(s)")
+
+        # Stage: Creating chunks
+        if on_stage_update:
+            on_stage_update("Creating chunks", 60, "Generating semantic section chunks and financial context blocks")
+
         chunks = self.chunker.chunk_pages(
             pages=pages,
             document_id=document_id,

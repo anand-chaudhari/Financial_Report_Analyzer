@@ -32,4 +32,9 @@ export const reportService = {
     const response = await apiClient.delete<ApiResponse<any>>(`/reports/${reportId}`);
     return response.data;
   },
+
+  async getDocumentStatus(documentId: string): Promise<ApiResponse<ReportItem>> {
+    const response = await apiClient.get<ApiResponse<ReportItem>>(`/documents/${documentId}/status`);
+    return response.data;
+  },
 };

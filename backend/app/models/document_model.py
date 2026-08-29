@@ -11,6 +11,9 @@ class DocumentModel:
     fileName: str
     pageCount: int = 0
     status: str = "uploaded"  # uploaded, processing, completed, failed
+    currentStage: str = "Ready"  # Uploading, Extracting text, Extracting tables, OCR (only when required), Creating chunks, Generating embeddings, Indexing, Ready, Failed
+    stageMessage: Optional[str] = None
+    progressPercent: int = 100
     storageUrl: str = ""
     companyName: Optional[str] = None
     financialYear: Optional[str] = None
@@ -29,6 +32,9 @@ class DocumentModel:
             "financialYear": self.financialYear,
             "pageCount": self.pageCount,
             "status": self.status,
+            "currentStage": self.currentStage,
+            "stageMessage": self.stageMessage,
+            "progressPercent": self.progressPercent,
             "storageUrl": self.storageUrl,
             "fileSize": self.fileSize,
             "uploadedAt": self.uploadedAt,
@@ -45,6 +51,9 @@ class DocumentModel:
             fileName=data.get("fileName", ""),
             pageCount=data.get("pageCount", 0),
             status=data.get("status", "uploaded"),
+            currentStage=data.get("currentStage", "Ready"),
+            stageMessage=data.get("stageMessage"),
+            progressPercent=data.get("progressPercent", 100),
             storageUrl=data.get("storageUrl", ""),
             companyName=data.get("companyName"),
             financialYear=data.get("financialYear"),
