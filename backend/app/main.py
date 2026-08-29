@@ -129,6 +129,16 @@ def create_app() -> FastAPI:
             "version": settings.APP_VERSION
         }
 
+    @app.get("/health", tags=["Root"])
+    @app.get("/api/v1/health", tags=["Root"])
+    async def health_check():
+        return {
+            "status": "healthy",
+            "service": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "environment": settings.ENVIRONMENT
+        }
+
     return app
 
 
