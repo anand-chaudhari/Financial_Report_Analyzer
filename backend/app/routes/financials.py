@@ -6,6 +6,7 @@ from ..schemas.financial_schema import (
     FinancialSummaryResponse,
     FinancialChartDataResponse,
     FinancialOverviewResponse,
+    RiskAnalysisResponse,
 )
 from ..schemas.common_schema import ApiResponse
 
@@ -58,4 +59,23 @@ async def get_financial_overview(
         success=True,
         message="Grounded financial overview generated successfully.",
         data=overview,
+    )
+
+
+@router.get("/{report_id}/risks", response_model=ApiResponse[RiskAnalysisResponse])
+async def get_financial_risks(
+    report_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Feature 6: Financial Risk & Red Flag Analyzer.
+    Extracts factual risks explicitly disclosed or strongly supported by the report.
+    Clearly separates 'Reported Risk' from 'Financial Indicator/Observation'.
+    """
+    user_id = current_user["uid"]
+    risks = financial_service.analyze_financial_risks(report_id=report_id, user_id=user_id)
+    return ApiResponse(
+        success=True,
+        message="Financial risk analysis completed successfully.",
+        data=risks,
     )

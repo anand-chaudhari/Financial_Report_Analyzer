@@ -10,7 +10,7 @@ from ..schemas.document_schema import (
     DocumentMetadata,
 )
 from ..schemas.summary_schema import DocumentSummaryResponse
-from ..schemas.financial_schema import FinancialOverviewResponse
+from ..schemas.financial_schema import FinancialOverviewResponse, RiskAnalysisResponse
 from ..utils.helpers import sanitize_filename
 from ..config import get_settings
 from ..utils.logger import setup_logger
@@ -244,6 +244,27 @@ async def get_document_financial_overview(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate financial overview: {str(e)}"
+        )
+
+
+@router.get("/{document_id}/risks", response_model=RiskAnalysisResponse)
+async def get_document_financial_risks(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Feature 6: Financial Risk & Red Flag Analyzer.
+    Extracts factual risks explicitly disclosed or strongly supported by the report.
+    Clearly separates 'Reported Risk' from 'Financial Indicator/Observation'.
+    """
+    user_id = current_user["uid"]
+    try:
+        return financial_service.analyze_financial_risks(report_id=document_id, user_id=user_id)
+    except Exception as e:
+        logger.error(f"Error analyzing risks for '{document_id}': {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze financial risks: {str(e)}"
         )
 
 

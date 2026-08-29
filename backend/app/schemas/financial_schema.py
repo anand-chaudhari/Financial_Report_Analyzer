@@ -117,3 +117,25 @@ class FinancialOverviewResponse(BaseModel):
     executive_overview: str = ""
     extracted_at: datetime = Field(default_factory=datetime.utcnow)
 
+
+class RiskItem(BaseModel):
+    title: str
+    category: str = "Reported Risk"  # "Reported Risk" | "Financial Indicator/Observation"
+    severity: str = "Medium"  # "High" | "Medium" | "Low" | "Informational"
+    explanation: str
+    supporting_evidence: str
+    page_number: Optional[int] = 1
+    section: Optional[str] = "Notes & MD&A"
+
+
+class RiskAnalysisResponse(BaseModel):
+    report_id: str
+    company_name: str
+    total_risks_count: int = 0
+    reported_risks: List[RiskItem] = Field(default_factory=list)
+    financial_indicators: List[RiskItem] = Field(default_factory=list)
+    risk_summary: str = ""
+    disclaimer: str = "This analysis highlights factual risks and financial indicators disclosed in the financial report. It does not constitute investment advice or recommendations."
+    extracted_at: datetime = Field(default_factory=datetime.utcnow)
+
+

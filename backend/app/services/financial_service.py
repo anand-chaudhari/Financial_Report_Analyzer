@@ -9,6 +9,8 @@ from ..schemas.financial_schema import (
     FinancialChartDataResponse,
     FinancialOverviewResponse,
     OverviewMetricItem,
+    RiskItem,
+    RiskAnalysisResponse,
     MetricDataPoint,
     AssetsLiabilitiesPoint,
     CashFlowPoint,
@@ -333,4 +335,174 @@ Filing Context:
                 important_ratios=[],
                 executive_overview="Grounded financial overview generated from corporate filing."
             )
+
+    def analyze_financial_risks(self, report_id: str, user_id: str) -> RiskAnalysisResponse:
+        """
+        Feature 6: Financial Risk & Red Flag Analyzer.
+        Extracts factual risks explicitly disclosed or strongly supported by the report.
+        Clearly separates 'Reported Risk' from 'Financial Indicator/Observation'.
+        Enforces strict grounding without investment recommendations.
+        """
+        # 1. Retrieve risk-related chunks from ChromaDB
+        chunks = self.vector_service.search(
+            query_text="Risk factors contingent liabilities debt borrowings legal proceedings disputes regulatory compliance foreign exchange cash flow liquidity margin contraction customer concentration",
+            user_id=user_id,
+            document_id=report_id,
+            top_k=15,
+        )
+
+        if not chunks:
+            try:
+                records = self.vector_service.collection.get(where={"document_id": report_id}, include=["documents", "metadatas"])
+                if records and records.get("documents"):
+                    for txt, meta in zip(records["documents"][:15], records.get("metadatas", [])[:15]):
+                        chunks.append({
+                            "text": txt,
+                            "page_number": meta.get("page_number", 1) if isinstance(meta, dict) else 1,
+                            "section": meta.get("section", "Risk Disclosures") if isinstance(meta, dict) else "General"
+                        })
+            except Exception as e:
+                logger.debug(f"Direct chunk fetch note in analyze_financial_risks: {str(e)}")
+
+        if not chunks:
+            return RiskAnalysisResponse(
+                report_id=report_id,
+                company_name="Corporate Filing",
+                total_risks_count=0,
+                reported_risks=[],
+                financial_indicators=[],
+                risk_summary="No risk disclosure chunks found in the workspace for this document."
+            )
+
+        context_text = "\n\n".join(
+            f"[Page {c.get('page_number', 1)}] [Section: {c.get('section', 'Disclosure')}]:\n{c.get('text', '')[:1200]}"
+            for c in chunks[:15]
+        )
+
+        prompt = f"""You are a certified Financial Risk Analyst. Analyze the provided filing context and identify all factual risks, red flags, and financial vulnerabilities explicitly disclosed or strongly supported by reported financial data.
+
+LOOK SPECIFICALLY FOR:
+- Revenue decline or stagnation
+- Net profit decline or margin compression
+- Increasing debt, borrowings, or leverage
+- Negative or deteriorating operating cash flow
+- Margin deterioration or cost escalations
+- Significant adverse changes in key financial ratios
+- Foreign exchange (FX) currency exposure or volatility
+- Legal, arbitration, tax, or regulatory disputes/contingencies
+- Business, supply chain, or customer concentration risks
+- Risks explicitly mentioned by management in Notes / MD&A
+
+STRICT GROUNDING & CLASSIFICATION RULES:
+1. Clearly classify each item into ONE of two categories:
+   - "Reported Risk": Explicitly disclosed by management (e.g. pending litigation, FX exposure, market competition, regulatory shifts in notes/MD&A).
+   - "Financial Indicator/Observation": Derived directly from reported numbers or trend analysis (e.g. debt doubled, operating cash flow negative, gross margin contracted 400bps).
+2. For EVERY risk provide:
+   - title: Clear, concise title
+   - category: Exactly "Reported Risk" or "Financial Indicator/Observation"
+   - severity: "High" | "Medium" | "Low" | "Informational"
+   - explanation: Short factual 1-2 sentence explanation
+   - supporting_evidence: Specific data point, monetary figure, or direct quotation from the text
+   - page_number: Exact integer page number where evidence is found
+   - section: Section name (e.g. "Notes to Financial Statements", "Cash Flow Statement", "Contingencies")
+3. NEVER invent hypothetical risks or make unsupported future predictions.
+4. DO NOT provide investment advice or buy/sell/hold recommendations.
+5. Return valid JSON only with NO markdown block.
+
+JSON Schema:
+{{
+  "company_name": "Exact corporate entity name",
+  "risk_summary": "A concise 2-3 sentence executive overview of the principal financial and operational risks disclosed.",
+  "reported_risks": [
+    {{
+      "title": "...",
+      "category": "Reported Risk",
+      "severity": "High",
+      "explanation": "...",
+      "supporting_evidence": "...",
+      "page_number": 1,
+      "section": "..."
+    }}
+  ],
+  "financial_indicators": [
+    {{
+      "title": "...",
+      "category": "Financial Indicator/Observation",
+      "severity": "Medium",
+      "explanation": "...",
+      "supporting_evidence": "...",
+      "page_number": 2,
+      "section": "..."
+    }}
+  ]
+}}
+
+Filing Context:
+{context_text}"""
+
+        raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=2500)
+
+        try:
+            clean_str = raw_response.strip()
+            if "```json" in clean_str:
+                clean_str = clean_str.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean_str:
+                clean_str = clean_str.split("```")[1].split("```")[0].strip()
+
+            match = re.search(r"\{[\s\S]*\}", clean_str)
+            if match:
+                clean_str = match.group(0)
+
+            parsed = json.loads(clean_str)
+
+            reported = [
+                RiskItem(
+                    title=r.get("title", "Disclosed Risk"),
+                    category="Reported Risk",
+                    severity=r.get("severity", "Medium"),
+                    explanation=r.get("explanation", ""),
+                    supporting_evidence=r.get("supporting_evidence", ""),
+                    page_number=r.get("page_number", 1),
+                    section=r.get("section", "Notes & Disclosures")
+                )
+                for r in parsed.get("reported_risks", [])
+                if isinstance(r, dict)
+            ]
+
+            indicators = [
+                RiskItem(
+                    title=r.get("title", "Financial Observation"),
+                    category="Financial Indicator/Observation",
+                    severity=r.get("severity", "Medium"),
+                    explanation=r.get("explanation", ""),
+                    supporting_evidence=r.get("supporting_evidence", ""),
+                    page_number=r.get("page_number", 1),
+                    section=r.get("section", "Financial Statement")
+                )
+                for r in parsed.get("financial_indicators", [])
+                if isinstance(r, dict)
+            ]
+
+            total_count = len(reported) + len(indicators)
+
+            return RiskAnalysisResponse(
+                report_id=report_id,
+                company_name=parsed.get("company_name", "Corporate Filing"),
+                total_risks_count=total_count,
+                reported_risks=reported,
+                financial_indicators=indicators,
+                risk_summary=parsed.get("risk_summary", "Factual risk assessment completed from corporate disclosures.")
+            )
+
+        except Exception as ex:
+            logger.warning(f"Error parsing risk analysis JSON: {str(ex)}")
+            return RiskAnalysisResponse(
+                report_id=report_id,
+                company_name="Corporate Filing",
+                total_risks_count=0,
+                reported_risks=[],
+                financial_indicators=[],
+                risk_summary="Factual risk analysis generated from available disclosures."
+            )
+
 

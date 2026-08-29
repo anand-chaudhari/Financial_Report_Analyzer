@@ -9,6 +9,7 @@ import { financialService } from '../../services/financialService';
 import { FinancialOverviewData } from '../../types/financial';
 import { FinancialKpiGrid } from './FinancialKpiGrid';
 import { YearOverYearComparisonSection } from './YearOverYearComparisonSection';
+import { RiskAnalysisSection } from './RiskAnalysisSection';
 
 interface FinancialOverviewSectionProps {
   reportId: string;
@@ -91,6 +92,13 @@ export const FinancialOverviewSection: React.FC<FinancialOverviewSectionProps> =
 
       {/* Feature 4: Year-over-Year (YoY) Financial Comparison Section */}
       <YearOverYearComparisonSection data={data} onOpenCitation={onOpenCitation} />
+
+      {/* Feature 6: Financial Risk & Red Flag Analyzer */}
+      <RiskAnalysisSection
+        reportId={reportId}
+        companyName={data?.company_name || companyName}
+        onOpenCitation={onOpenCitation}
+      />
     </div>
   );
 };

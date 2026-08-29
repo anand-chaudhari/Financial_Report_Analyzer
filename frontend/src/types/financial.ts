@@ -97,6 +97,27 @@ export interface FinancialOverviewData {
   extracted_at?: string;
 }
 
+export interface RiskItem {
+  title: string;
+  category: 'Reported Risk' | 'Financial Indicator/Observation' | string;
+  severity: 'High' | 'Medium' | 'Low' | 'Informational' | string;
+  explanation: string;
+  supporting_evidence: string;
+  page_number?: number;
+  section?: string;
+}
+
+export interface RiskAnalysisResponse {
+  report_id: string;
+  company_name: string;
+  total_risks_count: number;
+  reported_risks: RiskItem[];
+  financial_indicators: RiskItem[];
+  risk_summary: string;
+  disclaimer: string;
+  extracted_at?: string;
+}
+
 export interface SourceMetadata {
   page_number: number;
   section: string;
