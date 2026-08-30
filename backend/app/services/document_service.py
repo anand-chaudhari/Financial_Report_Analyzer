@@ -410,7 +410,10 @@ class DocumentService:
         return [d for d in _in_memory_documents.values() if d.userId == user_id or not user_id]
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
-        """Deletes a document record, vector chunks, and storage file."""
+        """Deletes a document record, vector chunks, storage file, and invalidates AI cache."""
+        from .cache_service import get_ai_cache_service
+        get_ai_cache_service().invalidate_document_cache(document_id=document_id, user_id=user_id)
+
         # Retrieve the document metadata before deleting to get its filename
         doc_model = self.get_document(document_id, user_id)
 

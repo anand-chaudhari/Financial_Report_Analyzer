@@ -15,6 +15,7 @@ class CompareRequest(BaseModel):
     document_b_id: str
     user_id: Optional[str] = "dev_user_123"
     focus_metric: Optional[str] = None
+    force_refresh: Optional[bool] = False
 
 
 @router.post("")
@@ -34,6 +35,7 @@ def compare_filings(
             doc_b_id=req.document_b_id,
             user_id=req.user_id or "dev_user_123",
             focus_metric=req.focus_metric,
+            force_refresh=bool(req.force_refresh),
         )
         return result
     except Exception as e:

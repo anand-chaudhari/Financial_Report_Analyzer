@@ -8,6 +8,7 @@ from ..services.document_service import DocumentService
 from ..services.financial_service import FinancialService
 from ..llm.llm_client import GeminiLLMClient
 from ..rag.rag_service import RAGService
+from .cache_service import get_ai_cache_service
 
 logger = logging.getLogger("app.services.comparison_service")
 
@@ -23,8 +24,46 @@ class ComparisonService:
         self.fin_service = fin_service or FinancialService()
         self.llm_client = llm_client or GeminiLLMClient()
         self.rag_service = RAGService()
+        self.cache_service = get_ai_cache_service()
 
     def compare_documents(
+        self,
+        doc_a_id: str,
+        doc_b_id: str,
+        user_id: str = "dev_user_123",
+        focus_metric: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Extracts financial metrics from both documents, computes delta variances,
+        and generates comparative institutional analysis with persistent result caching.
+        """
+        cache_key = self.cache_service.build_cache_key(
+            "comparison",
+            user_id=user_id,
+            document_id=doc_a_id,
+            document_b_id=doc_b_id,
+            extra_params={"focus_metric": focus_metric} if focus_metric else None,
+        )
+        lock = self.cache_service.get_lock_for_key(cache_key)
+
+        with lock:
+            cached = self.cache_service.get_cached_result(cache_key, force_refresh=force_refresh)
+            if cached:
+                return cached
+
+            self.cache_service.set_pending_status(cache_key, "comparison", user_id, [doc_a_id, doc_b_id])
+
+            try:
+                res = self._do_compare_documents(doc_a_id, doc_b_id, user_id, focus_metric)
+                if res and res.get("comparative_summary"):
+                    self.cache_service.save_result(cache_key, "comparison", user_id, [doc_a_id, doc_b_id], res)
+                return res
+            except Exception as ex:
+                self.cache_service.mark_failed(cache_key, str(ex))
+                raise ex
+
+    def _do_compare_documents(
         self,
         doc_a_id: str,
         doc_b_id: str,

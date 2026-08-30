@@ -104,7 +104,10 @@ class ReportService:
         return [r for r in _in_memory_reports.values() if r.user_id == user_id]
 
     def delete_report(self, report_id: str, user_id: str) -> bool:
-        """Deletes a report, its vector chunks, and Firestore records."""
+        """Deletes a report, its vector chunks, Firestore records, and invalidates AI cache."""
+        from .cache_service import get_ai_cache_service
+        get_ai_cache_service().invalidate_document_cache(document_id=report_id, user_id=user_id)
+
         # 1. Delete ChromaDB vector embeddings
         self.vector_service.delete_report_chunks(report_id)
 

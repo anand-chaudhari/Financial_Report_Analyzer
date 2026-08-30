@@ -42,6 +42,8 @@ Thumbs.db
 
 # Uploads & Temp Storage
 uploads/
+backend/cache/
+scratch/
 *.pdf
 
 # Logs

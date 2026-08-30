@@ -12,6 +12,7 @@ from ..services.document_service import DocumentService, ensure_document_indexed
 from ..llm.llm_client import GroqLLMClient
 from ..schemas.summary_schema import DocumentSummaryResponse, SummarySectionItem, KpiCardItem
 from ..utils.logger import setup_logger
+from .cache_service import get_ai_cache_service
 
 logger = setup_logger(__name__)
 
@@ -25,6 +26,7 @@ class SummaryService:
         self.vector_service = VectorStoreService()
         self.document_service = DocumentService()
         self.llm_client = GroqLLMClient()
+        self.cache_service = get_ai_cache_service()
 
     def _find_pdf_path(self, document_id: str, user_id: str) -> Optional[str]:
         """Locates the PDF file on disk across all potential upload roots."""
@@ -56,18 +58,38 @@ class SummaryService:
     def generate_document_summary(
         self,
         document_id: str,
-        user_id: str
+        user_id: str,
+        force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """
         Generates a comprehensive, 11-section grounded financial report summary for a document.
         STRICT GROUNDING: Strictly extracts and displays data present in the PDF report.
         """
-        cache_key = f"{user_id}_{document_id}"
-        if cache_key in _summary_cache:
-            cached = _summary_cache[cache_key]
-            if cached.get("executive_summary", {}).get("text") and "not available" not in cached["executive_summary"]["text"].lower():
-                logger.info(f"Returning cached summary for '{cache_key}'.")
+        cache_key = self.cache_service.build_cache_key("doc_summary", user_id=user_id, document_id=document_id)
+        lock = self.cache_service.get_lock_for_key(cache_key)
+
+        with lock:
+            cached = self.cache_service.get_cached_result(cache_key, force_refresh=force_refresh)
+            if cached:
                 return cached
+
+            self.cache_service.set_pending_status(cache_key, "doc_summary", user_id, [document_id])
+
+            try:
+                doc_summary = self._do_generate_document_summary(document_id, user_id, cache_key)
+                if doc_summary and doc_summary.get("executive_summary"):
+                    self.cache_service.save_result(cache_key, "doc_summary", user_id, [document_id], doc_summary)
+                return doc_summary
+            except Exception as ex:
+                self.cache_service.mark_failed(cache_key, str(ex))
+                raise ex
+
+    def _do_generate_document_summary(
+        self,
+        document_id: str,
+        user_id: str,
+        cache_key: str,
+    ) -> Dict[str, Any]:
 
         # 1. Verify Document Access & Ensure Vector Indexing
         doc = self.document_service.get_document(document_id=document_id, user_id=user_id)

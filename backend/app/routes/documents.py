@@ -247,6 +247,7 @@ async def get_document(
 @router.post("/{document_id}/summary", response_model=DocumentSummaryResponse)
 async def generate_document_summary(
     document_id: str,
+    refresh: bool = False,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
@@ -266,7 +267,7 @@ async def generate_document_summary(
     """
     user_id = current_user["uid"]
     try:
-        summary = summary_service.generate_document_summary(document_id=document_id, user_id=user_id)
+        summary = summary_service.generate_document_summary(document_id=document_id, user_id=user_id, force_refresh=refresh)
         return summary
     except Exception as e:
         logger.error(f"Error generating document summary for '{document_id}': {str(e)}", exc_info=True)
