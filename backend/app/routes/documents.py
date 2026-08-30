@@ -318,6 +318,40 @@ async def get_document_financial_risks(
         )
 
 
+from fastapi.responses import FileResponse
+
+@router.get("/{document_id}/file")
+async def download_document_file(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Authenticated endpoint to stream/download uploaded PDF filing.
+    Enforces strict user ownership verification.
+    """
+    user_id = current_user["uid"]
+    doc = document_service.get_document(document_id=document_id, user_id=user_id)
+
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found or access denied."
+        )
+
+    file_path = document_service.get_document_file_path(document_id=document_id, user_id=user_id)
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document PDF file could not be found on disk."
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=doc.fileName or f"{document_id}.pdf"
+    )
+
+
 @router.delete("/{document_id}")
 async def delete_document(
     document_id: str,

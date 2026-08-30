@@ -46,30 +46,39 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS Middleware - allows localhost, LAN IPs (192.168.x, 10.x, etc.) and configured origins
+    # CORS Middleware - strict origin matching based on ENVIRONMENT
+    allow_origin_regex = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$" if settings.ENVIRONMENT == "development" else None
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
-        allow_origin_regex=r"^https?://.*$",
+        allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    # Security Response Headers Middleware
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
 
     # GZip Response Compression for high concurrent load optimization
     from fastapi.middleware.gzip import GZipMiddleware
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     # Global Exception Handlers — both inject CORS headers manually.
-    # FastAPI's CORSMiddleware only processes responses that flow through it;
-    # exceptions (both HTTPException and bare Exception) can bypass it,
-    # causing the browser to see a misleading CORS error instead of the real 500.
     def _cors_headers(request: Request) -> dict:
         origin = request.headers.get("origin") or "*"
         return {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "*",
         }
 
@@ -114,11 +123,6 @@ def create_app() -> FastAPI:
     app.include_router(documents_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
     app.include_router(conversations_router, prefix="/api")
-
-    # Static files for local uploads
-    upload_dir = os.path.join(os.getcwd(), "uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
     # Root redirect / status
     @app.get("/", tags=["Root"])

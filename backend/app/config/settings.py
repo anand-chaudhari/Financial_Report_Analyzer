@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI Financial Report Analyzer API"
     APP_VERSION: str = "0.1.0"
     ENVIRONMENT: str = "development"
-    DEBUG: bool = True
+    DEBUG: bool = False
     
     # Server Settings
     BACKEND_HOST: str = "0.0.0.0"
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     MAX_UPLOAD_SIZE_MB: int = 25
+    MAX_PDF_PAGES: int = 150
+    PDF_PROCESSING_TIMEOUT_SEC: int = 60
     
     # Firebase Settings
     FIREBASE_CREDENTIALS_PATH: str = "./serviceAccountKey.json"

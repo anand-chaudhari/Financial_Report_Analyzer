@@ -453,6 +453,20 @@ class DocumentService:
         self.vector_service.delete_document(document_id=document_id, user_id=user_id)
         return True
 
+    def get_document_file_path(self, document_id: str, user_id: str) -> Optional[str]:
+        """Locates the full filesystem path of an uploaded PDF file for an authenticated user."""
+        doc = self.get_document(document_id, user_id)
+        if not doc:
+            return None
+        upload_roots = _get_uploads_roots()
+        for root_dir in upload_roots:
+            user_doc_dir = os.path.join(root_dir, user_id, document_id)
+            if os.path.exists(user_doc_dir):
+                pdfs = [f for f in os.listdir(user_doc_dir) if f.lower().endswith(".pdf")]
+                if pdfs:
+                    return os.path.join(user_doc_dir, pdfs[0])
+        return None
+
 
     def _store_file(
         self,

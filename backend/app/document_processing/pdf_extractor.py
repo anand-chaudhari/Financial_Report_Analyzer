@@ -44,6 +44,13 @@ class PDFExtractor:
 
             logger.info(f"Opened PDF with {len(doc)} pages.")
 
+            # Page count cap protection
+            from ..config import get_settings
+            settings = get_settings()
+            max_pages = getattr(settings, "MAX_PDF_PAGES", 150)
+            if len(doc) > max_pages:
+                raise ValueError(f"PDF page count ({len(doc)}) exceeds the maximum allowed limit of {max_pages} pages.")
+
             # 1. First pass: extract text and tables
             page_data = []
             scanned_count = 0
