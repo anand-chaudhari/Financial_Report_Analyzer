@@ -29,9 +29,9 @@ class GeminiLLMClient:
 
     def __init__(self, api_key: Optional[str] = None):
         settings = get_settings()
-        self.provider = (os.getenv("LLM_PROVIDER") or settings.LLM_PROVIDER or "groq").lower()
+        self.provider = (os.getenv("LLM_PROVIDER") or settings.LLM_PROVIDER or "gemini").lower()
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY
-        self.groq_api_key = os.getenv("GROQ_API_KEY") or settings.GROQ_API_KEY or "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"
+        self.groq_api_key = os.getenv("GROQ_API_KEY") or settings.GROQ_API_KEY
         self.openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
         self._initialized = False
 

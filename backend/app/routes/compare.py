@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from ..api.deps import get_current_user
+from ..api.rate_limiter import check_ai_rate_limit
 from ..services.comparison_service import ComparisonService, get_comparison_service
 from ..services.document_service import DocumentService
 
@@ -21,7 +22,7 @@ class CompareRequest(BaseModel):
     force_refresh: Optional[bool] = False
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(check_ai_rate_limit)])
 def compare_filings(
     req: CompareRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),

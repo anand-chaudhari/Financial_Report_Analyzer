@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from ..api.deps import get_current_user
+from ..api.rate_limiter import check_ai_rate_limit, check_upload_rate_limit
 from ..services.document_service import DocumentService
 from ..services.summary_service import SummaryService
 from ..services.financial_service import FinancialService
@@ -23,7 +24,7 @@ summary_service = SummaryService()
 financial_service = FinancialService()
 
 
-@router.post("/upload", response_model=DocumentUploadResponse)
+@router.post("/upload", response_model=DocumentUploadResponse, dependencies=[Depends(check_upload_rate_limit)])
 async def upload_document(
     file: UploadFile = File(...),
     current_user: Dict[str, Any] = Depends(get_current_user),

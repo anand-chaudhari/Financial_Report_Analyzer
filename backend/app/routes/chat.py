@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from ..api.deps import get_current_user
+from ..api.rate_limiter import check_ai_rate_limit
 from ..services.chat_service import ChatService
 from ..schemas.chat_schema import (
     ChatRequest,
@@ -19,7 +20,7 @@ router = APIRouter(prefix="", tags=["Chat & RAG Q&A"])
 chat_service = ChatService()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(check_ai_rate_limit)])
 async def chat_rag(
     request: ChatRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -58,7 +59,7 @@ async def chat_rag(
         )
 
 
-@router.post("/chat/query", response_model=ApiResponse[ChatQueryResponse])
+@router.post("/chat/query", response_model=ApiResponse[ChatQueryResponse], dependencies=[Depends(check_ai_rate_limit)])
 async def query_report(
     request: ChatQueryRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),

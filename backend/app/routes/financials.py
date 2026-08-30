@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from ..api.deps import get_current_user
+from ..api.rate_limiter import check_ai_rate_limit
 from ..services.financial_service import FinancialService
 from ..schemas.financial_schema import (
     FinancialSummaryResponse,
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/financials", tags=["Financial Analytics"])
 financial_service = FinancialService()
 
 
-@router.get("/{report_id}/summary", response_model=ApiResponse[FinancialSummaryResponse])
+@router.get("/{report_id}/summary", response_model=ApiResponse[FinancialSummaryResponse], dependencies=[Depends(check_ai_rate_limit)])
 async def get_financial_summary(
     report_id: str,
     refresh: bool = False,
