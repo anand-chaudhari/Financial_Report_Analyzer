@@ -1,11 +1,9 @@
+import gc
 import os
 from typing import List, Dict, Any, Optional
 
 # Disable ChromaDB telemetry for faster startup
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
-
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 
 from .embeddings import get_embedding_function
 from ..document_processing.chunker import DocumentChunk
@@ -14,7 +12,7 @@ from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-_chroma_client: Optional[chromadb.PersistentClient] = None
+_chroma_client = None
 COLLECTION_NAME = "financial_reports_chunks"
 
 
@@ -35,11 +33,14 @@ def _safe_to_list(obj):
     return list(obj)
 
 
-def get_chroma_client() -> chromadb.PersistentClient:
-    """Initializes and returns the singleton persistent ChromaDB client."""
+def get_chroma_client():
+    """Initializes and returns the singleton persistent ChromaDB client, lazy-loaded on demand."""
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client
+
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
 
     settings = get_settings()
     persist_dir = settings.CHROMA_PERSIST_DIRECTORY
@@ -154,6 +155,7 @@ class VectorStoreService:
         )
 
         logger.info(f"Added {len(chunks)} vector chunks for document '{document_id}' (Company: '{metadatas[0].get('company_name')}').")
+        gc.collect()
         return len(chunks)
 
     def search(
@@ -178,8 +180,16 @@ class VectorStoreService:
         k = top_k or settings.DEFAULT_TOP_K or 10
 
         where_filter: Dict[str, Any] = {}
+        filters = []
+        if user_id:
+            filters.append({"user_id": user_id})
         if document_id:
-            where_filter = {"document_id": document_id}
+            filters.append({"document_id": document_id})
+
+        if len(filters) == 1:
+            where_filter = filters[0]
+        elif len(filters) > 1:
+            where_filter = {"$and": filters}
 
         embedder = get_embedding_function()
         raw_query_vector = embedder.encode([actual_query])
@@ -210,11 +220,13 @@ class VectorStoreService:
             except Exception as e:
                 logger.warning(f"ChromaDB search by report_id note: {str(e)}")
 
+        fallback_where = {"user_id": user_id} if user_id else None
         if not results or not results.get("documents") or len(results["documents"][0]) == 0:
             try:
                 results = self.collection.query(
                     query_embeddings=query_vector,
                     n_results=query_k,
+                    where=fallback_where,
                     include=["documents", "metadatas", "distances"]
                 )
             except Exception as e:
@@ -253,7 +265,19 @@ class VectorStoreService:
 
         # 3. Exact Keyword Matching across the target document
         try:
-            doc_filter = {"document_id": document_id} if document_id else None
+            kw_filters = []
+            if user_id:
+                kw_filters.append({"user_id": user_id})
+            if document_id:
+                kw_filters.append({"document_id": document_id})
+
+            if len(kw_filters) == 1:
+                doc_filter = kw_filters[0]
+            elif len(kw_filters) > 1:
+                doc_filter = {"$and": kw_filters}
+            else:
+                doc_filter = None
+
             all_doc_records = self.collection.get(
                 where=doc_filter,
                 include=["documents", "metadatas"]

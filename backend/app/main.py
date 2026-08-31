@@ -15,11 +15,17 @@ from .utils.logger import setup_logger
 logger = setup_logger("app_main")
 
 
+import gc
+import tracemalloc
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     settings = get_settings()
-    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION} in [{settings.ENVIRONMENT}] mode...")
+    if not tracemalloc.is_tracing():
+        tracemalloc.start()
+    current_mem, _ = tracemalloc.get_traced_memory()
+    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION} in [{settings.ENVIRONMENT}] mode (Boot Memory: {current_mem/(1024*1024):.2f} MB)...")
     
     # Initialize Firebase Admin SDK if credentials exist
     get_firebase_app()

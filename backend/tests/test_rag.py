@@ -11,7 +11,9 @@ def test_validate_document_access():
     mock_vector_service.document_exists.side_effect = lambda document_id, user_id: (document_id == "doc_valid" and user_id == "user_alice")
 
     mock_llm_client = MagicMock(spec=GroqLLMClient)
-    rag_service = RAGService(vector_service=mock_vector_service, llm_client=mock_llm_client)
+    mock_doc_service = MagicMock()
+    mock_doc_service.ensure_document_indexed.return_value = False
+    rag_service = RAGService(vector_service=mock_vector_service, llm_client=mock_llm_client, document_service=mock_doc_service)
 
     assert rag_service.validate_document_access(user_id="user_alice", document_id="doc_valid") is True
     assert rag_service.validate_document_access(user_id="user_alice", document_id="doc_invalid") is False

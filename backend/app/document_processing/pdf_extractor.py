@@ -97,7 +97,6 @@ class PDFExtractor:
 
                 page_data.append({
                     "page_number": page_num,
-                    "page_obj": page,
                     "text": text,
                     "image_count": image_count,
                     "is_scanned": is_scanned,
@@ -184,6 +183,8 @@ class PDFExtractor:
         finally:
             if doc is not None:
                 doc.close()
+            import gc
+            gc.collect()
 
         return extracted_pages
 

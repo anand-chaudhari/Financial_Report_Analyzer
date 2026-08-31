@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""  # kept for legacy imports only
     OPENAI_API_KEY: str = ""
     DEFAULT_LLM_MODEL: str = "gemini-1.5-flash"
+    GROQ_FALLBACK_MODELS: str = "llama-3.3-70b-versatile,llama-3.1-8b-instant"
     
     # ChromaDB & Vector Store
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_data"

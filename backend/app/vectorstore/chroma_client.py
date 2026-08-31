@@ -2,10 +2,12 @@ import os
 from typing import List, Dict, Any, Optional
 
 # Disable ChromaDB telemetry to avoid startup network latency
+import gc
+from typing import List, Dict, Any, Optional
+
+# Disable ChromaDB telemetry to avoid startup network latency
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 from .embeddings import get_embedding_function
 from ..document_processing.chunker import DocumentChunk
 from ..config import get_settings
@@ -13,15 +15,18 @@ from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-_chroma_client: Optional[chromadb.PersistentClient] = None
+_chroma_client = None
 COLLECTION_NAME = "financial_reports_chunks"
 
 
-def get_chroma_client() -> chromadb.PersistentClient:
-    """Returns persistent ChromaDB client."""
+def get_chroma_client():
+    """Returns persistent ChromaDB client, lazy-loaded on first vector query."""
     global _chroma_client
     if _chroma_client is not None:
         return _chroma_client
+
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
 
     settings = get_settings()
     persist_dir = settings.CHROMA_PERSIST_DIRECTORY

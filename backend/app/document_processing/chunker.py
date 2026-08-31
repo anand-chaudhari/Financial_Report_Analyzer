@@ -1,10 +1,5 @@
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-
 from .pdf_extractor import ExtractedPage
 from .cleaner import TextCleaner
 from .section_detector import SectionDetector
@@ -35,13 +30,27 @@ class DocumentChunker:
         settings = get_settings()
         self.chunk_size = chunk_size or settings.CHUNK_SIZE
         self.chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
+        self._text_splitter = None
 
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap,
-            separators=["\n\n", "\n", ". ", "; ", " ", ""],
-            length_function=len,
-        )
+    @property
+    def text_splitter(self):
+        """Lazy loads RecursiveCharacterTextSplitter on first chunking call."""
+        if self._text_splitter is None:
+            try:
+                from langchain_text_splitters.character import RecursiveCharacterTextSplitter
+            except ImportError:
+                try:
+                    from langchain_text_splitters import RecursiveCharacterTextSplitter
+                except ImportError:
+                    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+            self._text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                separators=["\n\n", "\n", ". ", "; ", " ", ""],
+                length_function=len,
+            )
+        return self._text_splitter
 
     def chunk_pages(
         self,

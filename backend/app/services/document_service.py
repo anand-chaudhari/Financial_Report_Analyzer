@@ -123,23 +123,6 @@ class DocumentService:
                                 metadata=raw_meta,
                             )
                             _in_memory_documents[doc_dir] = doc_model
-
-                            # Restore in-memory document state; only index if vectors do not exist
-                            if not self.vector_service.document_exists(document_id=doc_dir, user_id=user_dir):
-                                proc_result = self.processor.process_pdf(
-                                    pdf_source=file_bytes,
-                                    document_id=doc_dir,
-                                    user_id=user_dir,
-                                    file_name=pdf_filename,
-                                    company_name=company_name,
-                                    financial_year=financial_year,
-                                )
-                                self.vector_service.add_document(
-                                    document_id=doc_dir,
-                                    user_id=user_dir,
-                                    chunks=proc_result.chunks,
-                                    overwrite_if_exists=False
-                                )
                         except Exception as e:
                             logger.debug(f"Note scanning document '{doc_dir}': {str(e)}")
         except Exception as scan_err:

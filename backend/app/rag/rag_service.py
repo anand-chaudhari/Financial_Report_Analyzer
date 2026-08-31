@@ -45,7 +45,10 @@ class RAGService:
         if self.vector_service.document_exists(document_id=document_id, user_id=user_id):
             return True
 
-        return self.document_service.ensure_document_indexed(document_id=document_id, user_id=user_id)
+        doc_service = getattr(self, "document_service", None)
+        if doc_service:
+            return doc_service.ensure_document_indexed(document_id=document_id, user_id=user_id)
+        return False
 
     def _format_context(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
         """
@@ -285,7 +288,7 @@ class RAGService:
         # 8. Evidence-Based Citation Verification: Only cite pages that actually support the answer
         is_fallback_or_error = any(
             phrase in clean_answer.lower()
-            for phrase in ("could not find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
+            for phrase in ("could not find enough information", "couldn't find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
         )
 
         valid_pages: List[int] = []
