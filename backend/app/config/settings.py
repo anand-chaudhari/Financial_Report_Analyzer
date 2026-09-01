@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     
     # Firebase Settings
     FIREBASE_CREDENTIALS_PATH: str = "./serviceAccountKey.json"
+    FIREBASE_SERVICE_ACCOUNT_JSON: str = ""
+    FIREBASE_CREDENTIALS_BASE64: str = ""
     FIREBASE_STORAGE_BUCKET: str = ""
     
     @property

@@ -130,8 +130,8 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api")
     app.include_router(conversations_router, prefix="/api")
 
-    # Root redirect / status
-    @app.get("/", tags=["Root"])
+    # Root redirect / status (Supports GET and HEAD for automated platform health probes like Render)
+    @app.api_route("/", methods=["GET", "HEAD"], tags=["Root"])
     async def root():
         return {
             "message": "AI Financial Report Analyzer Backend API is running.",
@@ -139,8 +139,8 @@ def create_app() -> FastAPI:
             "version": settings.APP_VERSION
         }
 
-    @app.get("/health", tags=["Root"])
-    @app.get("/api/v1/health", tags=["Root"])
+    @app.api_route("/health", methods=["GET", "HEAD"], tags=["Root"])
+    @app.api_route("/api/v1/health", methods=["GET", "HEAD"], tags=["Root"])
     async def health_check():
         return {
             "status": "healthy",
