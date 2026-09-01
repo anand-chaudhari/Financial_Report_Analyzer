@@ -21,10 +21,15 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
         
     settings = get_settings()
     cred_path = settings.FIREBASE_CREDENTIALS_PATH
-    
-    # Priority 1: Environment variable containing raw JSON string
+
+    # Render Secret Files fallback: if user mounted serviceAccountKey.json as a Secret File
+    RENDER_SECRET_PATH = "/etc/secrets/serviceAccountKey.json"
+    if not os.path.exists(cred_path) and os.path.exists(RENDER_SECRET_PATH):
+        cred_path = RENDER_SECRET_PATH
+
+    # Priority 1: Environment variable containing raw JSON string (most common for Render)
     service_account_json_env = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") or settings.FIREBASE_SERVICE_ACCOUNT_JSON
-    # Priority 2: Environment variable containing Base64 encoded JSON string
+    # Priority 2: Environment variable containing Base64-encoded JSON string
     service_account_b64_env = os.getenv("FIREBASE_CREDENTIALS_BASE64") or settings.FIREBASE_CREDENTIALS_BASE64
 
     cred = None
@@ -33,13 +38,20 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
     try:
         if service_account_json_env and service_account_json_env.strip():
             logger.info("Parsing Firebase credentials from FIREBASE_SERVICE_ACCOUNT_JSON environment variable...")
-            service_account_dict = json.loads(service_account_json_env.strip())
+            raw_json = service_account_json_env.strip()
+            # Safely parse the JSON, then fix private_key newlines that cloud env vars often escape
+            service_account_dict = json.loads(raw_json)
+            if "private_key" in service_account_dict:
+                # Unescape literal \n sequences that Render/GCP inject into multi-line values
+                service_account_dict["private_key"] = service_account_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(service_account_dict)
             init_source = "FIREBASE_SERVICE_ACCOUNT_JSON env var"
         elif service_account_b64_env and service_account_b64_env.strip():
             logger.info("Parsing Firebase credentials from FIREBASE_CREDENTIALS_BASE64 environment variable...")
             decoded_json = base64.b64decode(service_account_b64_env.strip()).decode("utf-8")
             service_account_dict = json.loads(decoded_json)
+            if "private_key" in service_account_dict:
+                service_account_dict["private_key"] = service_account_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(service_account_dict)
             init_source = "FIREBASE_CREDENTIALS_BASE64 env var"
         elif os.path.exists(cred_path):
@@ -54,8 +66,10 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
             logger.info(f"Firebase Admin SDK initialized successfully via {init_source}.")
         else:
             logger.warning(
-                f"No Firebase credentials found in env vars or local file '{cred_path}'. "
-                "Running in development/mock mode. Provide FIREBASE_SERVICE_ACCOUNT_JSON or serviceAccountKey.json for live Firebase authentication."
+                f"No Firebase credentials found in env vars, Render Secret Files, or local file '{cred_path}'. "
+                "Running in development/mock mode. Set FIREBASE_SERVICE_ACCOUNT_JSON env var on Render, "
+                "mount serviceAccountKey.json as a Render Secret File at /etc/secrets/serviceAccountKey.json, "
+                "or place serviceAccountKey.json locally for development."
             )
             # Check if default app exists
             if not firebase_admin._apps:

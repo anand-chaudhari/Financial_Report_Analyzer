@@ -3,7 +3,6 @@ from typing import List, Dict, Any, Optional
 
 # Disable ChromaDB telemetry to avoid startup network latency
 import gc
-from typing import List, Dict, Any, Optional
 
 # Disable ChromaDB telemetry to avoid startup network latency
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -40,6 +39,13 @@ def get_chroma_client():
     return _chroma_client
 
 
+def reset_chroma_client():
+    """Force-resets the global ChromaDB client (used after ephemeral storage restart)."""
+    global _chroma_client
+    _chroma_client = None
+    logger.warning("ChromaDB client reset. It will be re-initialized on next access.")
+
+
 def _safe_to_list(obj):
     """Kept for backward compatibility. SafeEmbedder now guarantees list[list[float]] output."""
     if hasattr(obj, "tolist"):
@@ -66,13 +72,31 @@ class ChromaVectorService:
 
     @property
     def collection(self):
-        """Lazy loads ChromaDB collection on first access."""
+        """Lazy loads ChromaDB collection on first access. Re-initializes if the
+        client was reset due to ephemeral storage restart (e.g. on Render free tier)."""
         if self._collection is None:
             client = get_chroma_client()
             self._collection = client.get_or_create_collection(
                 name=COLLECTION_NAME,
                 metadata={"hnsw:space": "cosine"}
             )
+        else:
+            # Sanity-check: if the underlying client was evicted (e.g. OOM / restart),
+            # the stored _collection object becomes stale. Detect this and re-create.
+            try:
+                _ = self._collection.count()  # lightweight no-op ping
+            except Exception:
+                logger.warning(
+                    "ChromaDB collection ping failed — likely ephemeral storage restart. "
+                    "Re-initializing client and collection..."
+                )
+                reset_chroma_client()
+                self._collection = None
+                client = get_chroma_client()
+                self._collection = client.get_or_create_collection(
+                    name=COLLECTION_NAME,
+                    metadata={"hnsw:space": "cosine"}
+                )
         return self._collection
 
     def upsert_chunks(self, chunks: List[DocumentChunk]) -> int:
