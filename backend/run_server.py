@@ -7,8 +7,8 @@ import time
 import subprocess
 import os
 
-PORT = 8000
-HOST = "127.0.0.1"
+PORT = int(os.environ.get("PORT", 8000))
+HOST = "0.0.0.0"
 RESTART_DELAY_SECONDS = 2
 
 
