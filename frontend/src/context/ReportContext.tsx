@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { ReportItem } from '../types/report';
 import { documentService } from '../services/documentService';
+import { useAuthContext } from './AuthContext';
 
 interface ReportContextType {
   reports: ReportItem[];
@@ -16,6 +17,7 @@ interface ReportContextType {
 const ReportContext = createContext<ReportContextType | undefined>(undefined);
 
 export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, loading: authLoading } = useAuthContext();
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [activeReport, setActiveReport] = useState<ReportItem | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -71,9 +73,16 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  // Only fetch reports when auth has resolved AND user is logged in
   useEffect(() => {
-    fetchReports();
-  }, [fetchReports]);
+    if (!authLoading && user) {
+      fetchReports();
+    } else if (!authLoading && !user) {
+      // User is logged out — clear report state
+      setReports([]);
+      setActiveReport(null);
+    }
+  }, [authLoading, user, fetchReports]);
 
   return (
     <ReportContext.Provider
