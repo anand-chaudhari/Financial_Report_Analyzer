@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from ..api.deps import get_current_user
@@ -34,7 +35,8 @@ async def chat_rag(
     doc_id = request.target_document_id
 
     try:
-        response = chat_service.process_query(
+        response = await asyncio.to_thread(
+            chat_service.process_query,
             document_id=doc_id,
             question=request.question,
             user_id=user_id,
@@ -68,7 +70,8 @@ async def query_report(
     user_id = current_user["uid"]
     doc_id = request.target_document_id
 
-    response = chat_service.process_query(
+    response = await asyncio.to_thread(
+        chat_service.process_query,
         document_id=doc_id,
         question=request.question,
         user_id=user_id,

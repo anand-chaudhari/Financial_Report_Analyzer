@@ -2,8 +2,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from ..models.report_model import ReportModel
-from ..document_processing.pdf_extractor import extract_text_from_pdf
-from ..document_processing.chunker import chunk_document_pages
+from ..document_processing.processor import DocumentProcessor
 from ..vectorstore.chroma_client import ChromaVectorService
 from ..firebase.firestore import get_firestore_client
 from ..utils.logger import setup_logger
@@ -15,20 +14,22 @@ _in_memory_reports: Dict[str, ReportModel] = {}
 
 
 class ReportService:
-    """Service handling report ingestion, extraction, indexing, and lifecycle."""
+    """Service handling multi-format report ingestion, extraction, indexing, and lifecycle."""
 
     def __init__(self):
         self.vector_service = ChromaVectorService()
         self.firestore_db = get_firestore_client()
+        self.processor = DocumentProcessor()
 
-    def process_and_index_pdf(
+    def process_and_index_document(
         self,
         file_bytes: bytes,
         filename: str,
         user_id: str,
-        report_id: Optional[str] = None
+        report_id: Optional[str] = None,
+        mime_type: Optional[str] = None,
     ) -> ReportModel:
-        """Full pipeline: PDF bytes -> PyMuPDF pages -> Clean/Chunk -> ChromaDB."""
+        """Full pipeline: Multi-format bytes -> Normalized Document -> Chunks -> ChromaDB."""
         rep_id = report_id or str(uuid.uuid4())
         
         # 1. Initialize record
@@ -44,32 +45,49 @@ class ReportService:
         self._save_report(report)
 
         try:
-            # 2. Extract pages with PyMuPDF
-            pages = extract_text_from_pdf(file_bytes)
-            report.total_pages = len(pages)
-
-            # 3. Semantic Chunking with Page Tracking
-            chunks = chunk_document_pages(
-                pages=pages,
-                report_id=rep_id,
-                user_id=user_id
+            # 2. Extract and chunk using universal DocumentProcessor
+            proc_result = self.processor.process_document(
+                file_source=file_bytes,
+                document_id=rep_id,
+                user_id=user_id,
+                file_name=filename,
+                mime_type=mime_type,
             )
+            report.total_pages = proc_result.total_pages
+            report.company_name = proc_result.company_name
+            report.fiscal_period = proc_result.financial_year
 
-            # 4. Store embeddings in ChromaDB
-            self.vector_service.upsert_chunks(chunks)
+            # 3. Store embeddings in ChromaDB
+            self.vector_service.upsert_chunks(proc_result.chunks)
 
-            # 5. Mark as ready
+            # 4. Mark as ready
             report.status = "ready"
             self._save_report(report)
-            logger.info(f"Report '{filename}' (ID: {rep_id}) processed and indexed successfully.")
+            logger.info(f"Report '{filename}' (ID: {rep_id}) processed and indexed successfully ({proc_result.total_pages} units, {len(proc_result.chunks)} chunks).")
             return report
 
         except Exception as e:
-            logger.error(f"Failed processing PDF report {rep_id}: {str(e)}")
+            logger.error(f"Failed processing report {rep_id}: {str(e)}")
             report.status = "failed"
             report.error_message = str(e)
             self._save_report(report)
             raise e
+
+    def process_and_index_pdf(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        user_id: str,
+        report_id: Optional[str] = None
+    ) -> ReportModel:
+        """Backward compatible PDF processing method."""
+        return self.process_and_index_document(
+            file_bytes=file_bytes,
+            filename=filename,
+            user_id=user_id,
+            report_id=report_id,
+            mime_type="application/pdf"
+        )
 
     def get_report(self, report_id: str, user_id: str) -> Optional[ReportModel]:
         """Retrieves a single report by ID."""
@@ -89,7 +107,8 @@ class ReportService:
         return None
 
     def list_reports(self, user_id: str) -> List[ReportModel]:
-        """Lists all reports for a specific user."""
+        """Lists all reports for a user."""
+        reports: List[ReportModel] = []
         if self.firestore_db:
             try:
                 docs = (
@@ -97,40 +116,40 @@ class ReportService:
                     .where("user_id", "==", user_id)
                     .stream()
                 )
-                return [ReportModel(**doc.to_dict()) for doc in docs]
+                for doc in docs:
+                    reports.append(ReportModel(**doc.to_dict()))
             except Exception as e:
                 logger.error(f"Firestore list_reports error: {str(e)}")
 
-        return [r for r in _in_memory_reports.values() if r.user_id == user_id]
+        for rep in _in_memory_reports.values():
+            if rep.user_id == user_id and not any(r.id == rep.id for r in reports):
+                reports.append(rep)
+
+        return sorted(reports, key=lambda x: x.uploaded_at, reverse=True)
 
     def delete_report(self, report_id: str, user_id: str) -> bool:
-        """Deletes a report, its vector chunks, Firestore records, and invalidates AI cache."""
-        from .cache_service import get_ai_cache_service
-        get_ai_cache_service().invalidate_document_cache(document_id=report_id, user_id=user_id)
+        """Deletes a report, its Firestore metadata, and its vector embeddings."""
+        report = self.get_report(report_id, user_id)
+        if not report:
+            return False
 
-        # 1. Delete ChromaDB vector embeddings
-        self.vector_service.delete_report_chunks(report_id)
-
-        # 2. Delete Firestore record
         if self.firestore_db:
             try:
                 self.firestore_db.collection("reports").document(report_id).delete()
             except Exception as e:
-                logger.error(f"Firestore delete error: {str(e)}")
+                logger.error(f"Firestore delete_report error: {str(e)}")
 
-        # 3. Delete from in-memory fallback
         if report_id in _in_memory_reports:
             del _in_memory_reports[report_id]
 
+        self.vector_service.delete_report_embeddings(report_id)
         return True
 
     def _save_report(self, report: ReportModel) -> None:
-        """Persists report model to Firestore and in-memory cache."""
+        """Helper to save report to Firestore and in-memory cache."""
         _in_memory_reports[report.id] = report
         if self.firestore_db:
             try:
-                self.firestore_db.collection("reports").document(report.id).set(
-                    report.to_dict()
-                )
+                self.firestore_db.collection("reports").document(report.id).set(report.to_dict())
             except Exception as e:
                 logger.error(f"Firestore save error: {str(e)}")

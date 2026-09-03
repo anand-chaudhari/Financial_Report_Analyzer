@@ -32,8 +32,13 @@ class GeminiLLMClient:
         self.provider = (os.getenv("LLM_PROVIDER") or settings.LLM_PROVIDER or "gemini").lower()
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY
         self.groq_api_key = os.getenv("GROQ_API_KEY") or settings.GROQ_API_KEY
+        self.nvidia_api_key = os.getenv("NVIDIA_API_KEY") or getattr(settings, "NVIDIA_API_KEY", "")
+        self.nvidia_base_url = os.getenv("NVIDIA_BASE_URL") or getattr(settings, "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
         self.openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
         self._initialized = False
+
+        if self.nvidia_api_key:
+            logger.info("Successfully configured NVIDIA NIM LLM client (Llama 3.3 70B Instruct / Nemotron).")
 
         if self.groq_api_key:
             logger.info("Successfully configured Groq LLM client (Llama 3.3 70B Versatile).")
@@ -86,7 +91,14 @@ class GeminiLLMClient:
     ) -> str:
         """
         Generates a grounded completion trying primary provider first, then automatic failovers.
+        Failover Hierarchy: Primary Provider -> NVIDIA -> Gemini -> Groq -> OpenAI.
         """
+        # If NVIDIA is explicitly configured as primary provider
+        if self.provider == "nvidia" and self.nvidia_api_key:
+            nvidia_res = self._try_nvidia(prompt, system_instruction, conversation_history, temperature, max_tokens)
+            if nvidia_res:
+                return nvidia_res
+
         # If Groq is explicitly configured as primary provider
         if self.provider == "groq" and self.groq_api_key:
             groq_res = self._try_groq(prompt, system_instruction, conversation_history, temperature, max_tokens)
@@ -131,14 +143,15 @@ class GeminiLLMClient:
             )
 
             candidates_to_try = [
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
-                "gemini-2.0-flash-lite",
-                "gemini-2.5-pro",
-                "gemini-1.5-flash-8b",
+                "gemini-2.0-flash",
                 "gemini-1.5-flash",
+                "gemini-2.0-flash-lite",
                 "gemini-1.5-pro",
+                "gemini-1.5-flash-8b",
             ]
+            if hasattr(self, "_working_model") and self._working_model in candidates_to_try:
+                candidates_to_try.remove(self._working_model)
+                candidates_to_try.insert(0, self._working_model)
 
             last_error = None
             for model_name in candidates_to_try:
@@ -170,6 +183,12 @@ class GeminiLLMClient:
 
             logger.error(f"All Gemini candidates exhausted. Attempting backup providers... (Last error: {str(last_error)})")
 
+        # Automatic backup: Try NVIDIA
+        if self.nvidia_api_key:
+            nvidia_res = self._try_nvidia(prompt, system_instruction, conversation_history, temperature, max_tokens)
+            if nvidia_res:
+                return nvidia_res
+
         # Automatic backup: Try Groq
         if self.groq_api_key:
             groq_res = self._try_groq(prompt, system_instruction, conversation_history, temperature, max_tokens)
@@ -183,6 +202,102 @@ class GeminiLLMClient:
                 return openai_res
 
         return "⚠️ The AI generation service is temporarily busy or rate limited (HTTP 429). Please wait a few moments and try your question again."
+
+    def _try_nvidia(
+        self,
+        prompt: str,
+        system_instruction: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Optional[str]:
+        """Calls NVIDIA API (NVIDIA NIM) using OpenAI SDK or direct HTTP REST API."""
+        if not self.nvidia_api_key:
+            return None
+
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        if conversation_history:
+            for m in conversation_history:
+                r = m.get("role") or m.get("sender") or "user"
+                messages.append({"role": "assistant" if r in ("assistant", "ai") else "user", "content": m.get("content") or m.get("text") or ""})
+        messages.append({"role": "user", "content": prompt})
+
+        nvidia_models = [
+            "moonshotai/kimi-k3",
+            "meta/llama-3.2-90b-vision-instruct",
+            "mistralai/mistral-large",
+            "nv-mistralai/mistral-nemo-12b-instruct",
+            "meta/llama-3.3-70b-instruct",
+        ]
+
+        # 1. Try OpenAI client configured with NVIDIA NIM base_url
+        try:
+            from openai import OpenAI
+            client = OpenAI(
+                base_url=self.nvidia_base_url,
+                api_key=self.nvidia_api_key.strip(),
+            )
+            for model_name in nvidia_models:
+                try:
+                    logger.info(f"Attempting NVIDIA NIM completion with model '{model_name}'...")
+                    resp = client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if resp.choices and resp.choices[0].message.content:
+                        text = resp.choices[0].message.content.strip()
+                        import re
+                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                        logger.info(f"NVIDIA '{model_name}' generated response successfully ({len(text)} chars).")
+                        return text
+                except Exception as m_err:
+                    logger.warning(f"NVIDIA model '{model_name}' note: {str(m_err)}")
+                    continue
+        except Exception as client_err:
+            logger.debug(f"OpenAI SDK for NVIDIA note: {str(client_err)}")
+
+        # 2. Direct HTTP REST fallback via urllib
+        import json
+        import urllib.request
+        import re
+
+        for model_name in nvidia_models:
+            try:
+                url = f"{self.nvidia_base_url.rstrip('/')}/chat/completions"
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.nvidia_api_key.strip()}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "FinSightAI/1.0",
+                }
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    if resp_data.get("choices") and len(resp_data["choices"]) > 0:
+                        content = resp_data["choices"][0]["message"]["content"]
+                        if content:
+                            text = re.sub(r"<think>.*?</think>", "", content.strip(), flags=re.DOTALL).strip()
+                            logger.info(f"NVIDIA REST '{model_name}' generated response successfully ({len(text)} chars).")
+                            return text
+            except Exception as rest_err:
+                logger.warning(f"NVIDIA REST model '{model_name}' error: {str(rest_err)}")
+                continue
+
+        return None
 
     def _try_groq(
         self,
@@ -205,13 +320,17 @@ class GeminiLLMClient:
                 messages.append({"role": "assistant" if r in ("assistant", "ai") else "user", "content": m.get("content") or m.get("text") or ""})
         messages.append({"role": "user", "content": prompt})
 
-        # Models to try (Non-compound verified standard models on Groq)
+        # High-performance live models on Groq
         groq_models = [
             "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
-            "qwen/qwen3.8-27b",
+            "groq/compound",
             "qwen/qwen3.6-27b",
+            "qwen/qwen3.8-27b",
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
         ]
+
+        import re
 
         # 1. Try Groq SDK
         try:
@@ -226,7 +345,7 @@ class GeminiLLMClient:
                         max_tokens=max_tokens,
                     )
                     if resp.choices and resp.choices[0].message.content:
-                        text = resp.choices[0].message.content.strip()
+                        text = re.sub(r"<think>.*?</think>", "", resp.choices[0].message.content.strip(), flags=re.DOTALL).strip()
                         logger.info(f"Groq SDK '{groq_model}' generated response successfully ({len(text)} chars).")
                         return text
                 except Exception as m_err:
@@ -264,7 +383,7 @@ class GeminiLLMClient:
                     if resp_data.get("choices") and len(resp_data["choices"]) > 0:
                         content = resp_data["choices"][0]["message"]["content"]
                         if content:
-                            text = content.strip()
+                            text = re.sub(r"<think>.*?</think>", "", content.strip(), flags=re.DOTALL).strip()
                             logger.info(f"Groq REST '{groq_model}' generated response successfully ({len(text)} chars).")
                             return text
             except Exception as rest_err:

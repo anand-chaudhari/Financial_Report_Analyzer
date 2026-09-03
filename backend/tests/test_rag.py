@@ -1,5 +1,10 @@
+import os
+import sys
 import pytest
 from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from app.rag.rag_service import RAGService
 from app.rag.prompts import NO_INFORMATION_FALLBACK_RESPONSE
 from app.vectorstore.vector_service import VectorStoreService
@@ -47,7 +52,17 @@ def test_rag_query_success():
         "Operating income reached $123.2 billion [Page 8]."
     )
 
-    rag_service = RAGService(vector_service=mock_vector_service, llm_client=mock_llm_client)
+    mock_doc_service = MagicMock()
+    mock_doc_service.ensure_document_indexed.return_value = True
+    mock_nv = MagicMock()
+    mock_nv.is_available = False
+
+    rag_service = RAGService(
+        vector_service=mock_vector_service,
+        llm_client=mock_llm_client,
+        document_service=mock_doc_service,
+        nvidia_client=mock_nv,
+    )
     res = rag_service.answer_question(
         user_id="user_alice",
         document_id="doc_valid",
@@ -81,7 +96,17 @@ def test_rag_query_no_information_fallback():
     mock_llm_client = MagicMock(spec=GroqLLMClient)
     mock_llm_client.generate.return_value = NO_INFORMATION_FALLBACK_RESPONSE
 
-    rag_service = RAGService(vector_service=mock_vector_service, llm_client=mock_llm_client)
+    mock_doc_service = MagicMock()
+    mock_doc_service.ensure_document_indexed.return_value = True
+    mock_nv = MagicMock()
+    mock_nv.is_available = False
+
+    rag_service = RAGService(
+        vector_service=mock_vector_service,
+        llm_client=mock_llm_client,
+        document_service=mock_doc_service,
+        nvidia_client=mock_nv,
+    )
     res = rag_service.answer_question(
         user_id="user_alice",
         document_id="doc_valid",

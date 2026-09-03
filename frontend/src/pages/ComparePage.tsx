@@ -22,7 +22,7 @@ import {
   Legend,
   CartesianGrid,
 } from 'recharts';
-import { RichMarkdownRenderer } from '../components/common/RichMarkdownRenderer';
+import { API_BASE_URL } from '../utils/constants';
 
 interface ComparisonData {
   document_a: {
@@ -78,7 +78,7 @@ export const ComparePage: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const response = await fetch('http://localhost:8000/api/v1/compare', {
+      const response = await fetch(`${API_BASE_URL}/compare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

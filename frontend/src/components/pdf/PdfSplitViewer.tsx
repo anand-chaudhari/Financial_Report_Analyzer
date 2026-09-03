@@ -12,6 +12,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { SourceMetadata } from '../../types/financial';
+import { API_BASE_URL } from '../../utils/constants';
 
 interface PdfSplitViewerProps {
   documentId: string;
@@ -34,9 +35,10 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
   const [zoom, setZoom] = useState<number>(100);
 
   // Derive source PDF URL
+  const serverOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
   const pdfUrl = storageUrl
-    ? (storageUrl.startsWith('http') ? storageUrl : `http://localhost:8000${storageUrl}`)
-    : `http://localhost:8000/api/v1/documents/preview/${encodeURIComponent(fileName)}#page=${currentPage}`;
+    ? (storageUrl.startsWith('http') ? storageUrl : `${serverOrigin}${storageUrl}`)
+    : `${API_BASE_URL}/documents/preview/${encodeURIComponent(fileName)}#page=${currentPage}`;
 
   const handlePrevPage = () => {
     if (currentPage > 1) setCurrentPage((prev) => prev - 1);
@@ -48,8 +50,10 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
 
   return (
     <div
-      className={`h-full flex flex-col bg-slate-900 border-l border-slate-800 transition-all duration-300 shadow-2xl z-30 rounded-3xl overflow-hidden ${
-        isExpanded ? 'fixed inset-4 z-50 rounded-2xl' : 'w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px]'
+      className={`flex flex-col bg-slate-900 border border-slate-800 transition-all duration-300 shadow-2xl z-30 rounded-3xl overflow-hidden ${
+        isExpanded
+          ? 'fixed inset-2 sm:inset-4 z-50 rounded-2xl h-[calc(100vh-16px)] sm:h-[calc(100vh-32px)]'
+          : 'w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] h-[520px] lg:h-full min-h-[420px]'
       }`}
     >
       {/* Top Header Bar */}

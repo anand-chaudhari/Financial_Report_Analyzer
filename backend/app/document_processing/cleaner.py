@@ -1,10 +1,14 @@
 import re
 from typing import List
 
+_RE_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_RE_SPACES = re.compile(r"[ \t]+")
+_RE_NEWLINES = re.compile(r"\n{3,}")
+
 
 class TextCleaner:
     """
-    Cleaner for financial PDF documents.
+    High-performance cleaner for financial PDF documents.
     Normalizes whitespace and removes control characters while strictly preserving:
     - Monetary symbols ($, €, £, ¥, ₹)
     - Percentages (e.g. 46.2%, +12.9%)
@@ -22,13 +26,13 @@ class TextCleaner:
         cleaned = text.replace("\u00a0", " ").replace("\u200b", "").replace("\xad", "")
 
         # 2. Strip non-printable ASCII control characters (preserving \n and \t)
-        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", cleaned)
+        cleaned = _RE_CONTROL_CHARS.sub("", cleaned)
 
         # 3. Replace multiple horizontal spaces/tabs on a single line with a single space
-        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = _RE_SPACES.sub(" ", cleaned)
 
         # 4. Normalize excessive newlines (3 or more consecutive newlines reduced to 2)
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = _RE_NEWLINES.sub("\n\n", cleaned)
 
         # 5. Trim whitespace per line while preserving nonempty lines
         lines = [line.strip() for line in cleaned.split("\n")]

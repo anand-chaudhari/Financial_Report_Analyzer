@@ -1,3 +1,6 @@
+import os
+import uuid
+import asyncio
 from typing import Dict, Any, List
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from ..api.deps import get_current_user
@@ -30,55 +33,13 @@ async def upload_document(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
-    Secure endpoint to upload a financial report in PDF format:
+    Secure streaming endpoint to upload financial reports up to 200MB:
     1. Authenticates user via Firebase Bearer token
-    2. Validates PDF format, magic bytes, and file size limits
-    3. Generates unique document ID
-    4. Stores file and creates Firestore metadata record
-    5. Returns document metadata with processing state
+    2. Streams file to disk in 1MB chunks to keep localhost RAM flat
+    3. Validates format and magic bytes via FileTypeDetector
+    4. Executes incremental processing pipeline (Analyzing -> Extracting -> OCR -> Chunking -> Embedding -> Indexing -> Ready)
+    5. Cleans up temporary upload file safely
     """
-    settings = get_settings()
-
-    # 1. Filename & Extension Validation
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only PDF documents (.pdf) are supported."
-        )
-
-    # 2. Read File Bytes
-    try:
-        file_bytes = await file.read()
-    except Exception as e:
-        logger.error(f"Error reading uploaded file: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read uploaded file."
-        )
-
-    # 3. Empty File Validation
-    if len(file_bytes) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty (0 bytes)."
-        )
-
-    # 4. Maximum File Size Validation
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    if len(file_bytes) > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size ({len(file_bytes) / (1024*1024):.2f}MB) exceeds the maximum limit of {settings.MAX_UPLOAD_SIZE_MB}MB."
-        )
-
-    # 5. Magic Byte Header Check (%PDF-)
-    if not file_bytes.startswith(b"%PDF-"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Corrupted or invalid PDF header. Please upload a valid PDF document."
-        )
-
-    # 6. Derive Authenticated User ID (Never trust client-supplied user ID)
     user_id = current_user.get("uid")
     if not user_id:
         raise HTTPException(
@@ -86,13 +47,60 @@ async def upload_document(
             detail="Authenticated user identity could not be verified."
         )
 
-    cleaned_filename = sanitize_filename(file.filename)
-    logger.info(f"Processing upload for user '{user_id}': '{cleaned_filename}' ({len(file_bytes)} bytes)")
+    cleaned_filename = sanitize_filename(file.filename or "report.pdf")
+    temp_dir = os.path.join(os.getcwd(), "uploads", "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_path = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}_{cleaned_filename}")
 
-    # 7. Process & Store Document (Extract metadata, save to Firestore)
+    # 1. Stream file chunks to disk (Zero memory overhead for 200MB PDFs)
     try:
-        doc = document_service.process_and_save_upload(
-            file_bytes=file_bytes,
+        total_bytes = 0
+        with open(temp_file_path, "wb") as f_out:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1 MB stream
+                if not chunk:
+                    break
+                f_out.write(chunk)
+                total_bytes += len(chunk)
+    except Exception as e:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        logger.error(f"Error streaming uploaded file: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to receive uploaded file stream."
+        )
+
+    # 2. File Format and Size Validation via FileTypeDetector
+    from ..document_processing.file_detector import FileTypeDetector, UnsupportedFileFormatException
+    try:
+        detected_fmt, file_size = FileTypeDetector.validate_file(
+            file_bytes_or_path=temp_file_path,
+            filename=cleaned_filename,
+            mime_type=file.content_type
+        )
+    except UnsupportedFileFormatException as uf_err:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(uf_err)
+        )
+    except Exception as val_err:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file: {str(val_err)}"
+        )
+
+    logger.info(f"Processing streamed upload for user '{user_id}': '{cleaned_filename}' ({file_size / (1024*1024):.2f} MB)")
+
+    # 3. Process & Store Document (Extract metadata, save to Firestore asynchronously without blocking event loop)
+    try:
+        doc = await asyncio.to_thread(
+            document_service.process_and_save_upload,
+            file_path=temp_file_path,
             filename=cleaned_filename,
             user_id=user_id
         )
@@ -125,8 +133,29 @@ async def upload_document(
         logger.error(f"Error processing document upload: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process and store document: {str(e)}"
+            detail=f"Error processing document: {str(e)}"
         )
+    finally:
+        # Temporary file cleanup
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                pass
+
+
+@router.post("/{document_id}/cancel")
+async def cancel_document_processing(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Cancels an in-progress document processing pipeline."""
+    cancelled = document_service.cancel_processing(document_id)
+    return {
+        "success": True,
+        "cancelled": cancelled,
+        "message": f"Cancellation request registered for document '{document_id}'."
+    }
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -268,7 +297,12 @@ async def generate_document_summary(
     """
     user_id = current_user["uid"]
     try:
-        summary = summary_service.generate_document_summary(document_id=document_id, user_id=user_id, force_refresh=refresh)
+        summary = await asyncio.to_thread(
+            summary_service.generate_document_summary,
+            document_id=document_id,
+            user_id=user_id,
+            force_refresh=refresh,
+        )
         return summary
     except Exception as e:
         logger.error(f"Error generating document summary for '{document_id}': {str(e)}", exc_info=True)
@@ -281,15 +315,21 @@ async def generate_document_summary(
 @router.get("/{document_id}/overview", response_model=FinancialOverviewResponse)
 async def get_document_financial_overview(
     document_id: str,
+    refresh: bool = False,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Feature 2: Automatic Financial Report Overview comparing FY2025 vs FY2026.
-    Extracts only metrics reported in the PDF filing.
+    Extracts only metrics reported in the filing with persistent result caching.
     """
     user_id = current_user["uid"]
     try:
-        return financial_service.get_financial_overview(report_id=document_id, user_id=user_id)
+        return await asyncio.to_thread(
+            financial_service.get_financial_overview,
+            report_id=document_id,
+            user_id=user_id,
+            force_refresh=refresh,
+        )
     except Exception as e:
         logger.error(f"Error generating financial overview for '{document_id}': {str(e)}", exc_info=True)
         raise HTTPException(
@@ -301,16 +341,21 @@ async def get_document_financial_overview(
 @router.get("/{document_id}/risks", response_model=RiskAnalysisResponse)
 async def get_document_financial_risks(
     document_id: str,
+    refresh: bool = False,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Feature 6: Financial Risk & Red Flag Analyzer.
-    Extracts factual risks explicitly disclosed or strongly supported by the report.
-    Clearly separates 'Reported Risk' from 'Financial Indicator/Observation'.
+    Extracts factual risks explicitly disclosed with persistent result caching.
     """
     user_id = current_user["uid"]
     try:
-        return financial_service.analyze_financial_risks(report_id=document_id, user_id=user_id)
+        return await asyncio.to_thread(
+            financial_service.analyze_financial_risks,
+            report_id=document_id,
+            user_id=user_id,
+            force_refresh=refresh,
+        )
     except Exception as e:
         logger.error(f"Error analyzing risks for '{document_id}': {str(e)}", exc_info=True)
         raise HTTPException(

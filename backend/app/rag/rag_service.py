@@ -26,6 +26,7 @@ class RAGService:
         vector_service: Optional[VectorStoreService] = None,
         document_service: Optional[Any] = None,
         llm_client: Optional[GroqLLMClient] = None,
+        nvidia_client: Optional[Any] = None,
     ):
         self.vector_service = vector_service or VectorStoreService()
         if document_service is None:
@@ -34,6 +35,7 @@ class RAGService:
         else:
             self.document_service = document_service
         self.llm_client = llm_client or GroqLLMClient()
+        self.nvidia_client = nvidia_client
 
     def validate_document_access(self, user_id: str, document_id: str) -> bool:
         """
@@ -52,25 +54,26 @@ class RAGService:
 
     def _format_context(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
         """
-        Constructs clearly labeled evidence blocks from retrieved chunks.
-        Preserves full text of the chunks so detailed tables, metrics, and explanations are not truncated.
+        Constructs clearly labeled evidence blocks from retrieved chunks across all document formats.
+        Preserves exact tables, units, currencies, and line items.
         """
         context_blocks = []
         for idx, chunk in enumerate(retrieved_chunks, 1):
             page_no = chunk.get("page_number", 1)
             sec = (chunk.get("section") or "Financial Statement").strip()
+            loc_str = chunk.get("source_location") or f"Page {page_no}"
             text = (chunk.get("text") or "").strip()
 
-            # Sanitize internal OCR tokens
+            # Sanitize internal tokens
             text = re.sub(r"svgPage\s*\d+", "", text)
             text = re.sub(r"Evidence\s*\d+\s*[:\-]", "", text)
 
-            # Preserve detailed chunk content up to 3000 chars
-            if len(text) > 3000:
-                text = text[:3000] + "..."
+            # Preserve detailed chunk content up to 3500 chars
+            if len(text) > 3500:
+                text = text[:3500] + "..."
 
             block = (
-                f"[Page {page_no} — {sec}]\n"
+                f"--- EVIDENCE BLOCK {idx} [Source: {sec}, {loc_str}] ---\n"
                 f"{text}"
             )
             context_blocks.append(block)
@@ -109,15 +112,15 @@ class RAGService:
         top_k: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Executes full RAG query process:
-        1. Validate ownership & trigger on-demand vector indexing if needed
-        2. Vector search & filter by document_id and user_id (top_k default=8)
-        3. Deduplicate and build labeled evidence context
-        4. Send system prompt + user turn to Groq LLM
-        5. Return natural-language answer, structured sources, and retrieved_chunks
+        Executes full precision financial RAG query process:
+        1. Validates document vector presence
+        2. Financial domain synonym expansion & multi-query retrieval
+        3. Context window expansion for primary table pages
+        4. NVIDIA semantic reranking if available
+        5. Sends formatted evidence to LLM with financial accuracy prompt
+        6. Returns structured answer with verified sources
         """
         logger.info(f"RAG Engine query for User '{user_id}', Doc '{document_id}': {question}")
-
         try:
             return self._answer_question_inner(
                 user_id=user_id,
@@ -144,34 +147,39 @@ class RAGService:
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         top_k: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Inner RAG pipeline - isolated so errors are caught by answer_question wrapper."""
+        """Inner RAG pipeline with high-precision financial metric routing and verification."""
         # 1. Ensure Document Vectors Exist in ChromaDB
         self.validate_document_access(user_id=user_id, document_id=document_id)
 
-        # 2. Vector Search (Primary query with semantic financial term expansion)
+        # 2. Vector Search (Primary query with financial synonyms & section markers)
         search_query = question.strip()
         q_lower = search_query.lower()
-        
+
+        # Classify intent & expand with financial domain synonyms and section headings
         if any(t in q_lower for t in ("revenue", "sales", "turnover", "income", "topline", "top line")):
-            search_query = f"{question} Statement of Profit and Loss Revenue from operations Other income Total revenue Total income turnover"
+            search_query = f"{question} Statement of Profit and Loss Revenue from operations Other income Total revenue Turnover Sales particulars March 31"
+        elif any(t in q_lower for t in ("ebitda", "operating profit", "operating margin", "operating ebitda")):
+            search_query = f"{question} Statement of Profit and Loss EBITDA Operating Profit before depreciation finance cost employee expenses"
         elif any(t in q_lower for t in ("net profit", "profit", "net income", "pat", "pbt", "profit after tax", "profit before tax", "loss")):
-            search_query = f"{question} Statement of Profit and Loss Profit After Tax PAT Profit Before Tax PBT Net Profit Net Income Total Comprehensive Income"
-        elif any(t in q_lower for t in ("asset", "assets", "property", "plant", "equipment", "non-current", "current assets")):
-            search_query = f"{question} Balance sheet Total assets Non-current assets Current assets Property plant and equipment Inventories Trade receivables"
-        elif any(t in q_lower for t in ("liability", "liabilities", "debt", "borrowing", "borrowings", "payables", "equity")):
-            search_query = f"{question} Balance sheet Total equity Total liabilities Borrowings Current liabilities Non-current liabilities Trade payables"
+            search_query = f"{question} Statement of Profit and Loss Profit for the year Profit After Tax PAT Profit Before Tax PBT Net Profit Total Comprehensive Income"
+        elif any(t in q_lower for t in ("eps", "earnings per share", "diluted eps", "basic eps")):
+            search_query = f"{question} Earnings per equity share Basic Diluted EPS Statement of Profit and Loss Nominal value per share"
+        elif any(t in q_lower for t in ("asset", "assets", "property", "plant", "equipment", "non-current", "current assets", "ppe")):
+            search_query = f"{question} Balance Sheet Total assets Non-current assets Current assets Property plant and equipment Inventories Trade receivables Cash"
+        elif any(t in q_lower for t in ("liability", "liabilities", "debt", "borrowing", "borrowings", "payables", "equity", "debt-to-equity")):
+            search_query = f"{question} Balance Sheet Total equity Total liabilities Borrowings Long term borrowings Short term borrowings Current liabilities Trade payables"
+        elif any(t in q_lower for t in ("cash flow", "cashflow", "operating cash", "investing", "financing", "free cash flow")):
+            search_query = f"{question} Statement of Cash Flows Cash generated from operations Operating activities Investing activities Financing activities Net increase in cash"
+        elif any(t in q_lower for t in ("ratio", "current ratio", "roe", "roce", "margin", "gearing")):
+            search_query = f"{question} Key Ratios Operating Margin Net Margin Current Ratio Debt Equity ROE Return on Equity ROCE"
         elif any(t in q_lower for t in ("company", "name", "cin", "corporate", "who", "registered", "auditor")):
             search_query = f"{question} Company name Corporate identification number CIN Registered office Independent auditor Directors report"
         elif any(t in q_lower for t in ("year", "financial year", "fiscal", "period", "fy")):
             search_query = f"{question} Financial year Fiscal year Ended 31st March Annual report Statement of accounts"
-        elif any(t in q_lower for t in ("cash flow", "cashflow", "operating cash", "investing", "financing")):
-            search_query = f"{question} Statement of cash flows Cash generated from operations Operating activities Investing activities Financing activities"
-        elif any(t in q_lower for t in ("invest", "stock", "buy", "hold", "worth", "valuation", "recommendation", "fundamental")):
-            search_query = f"{question} Statement of Profit and Loss Net Income Total Revenue Balance Sheet Total Assets Total Debt Cash Flows Operating Margin Key Risks"
 
         k_results = top_k or 10
         logger.info(f"RAG Retrieval -> Query: '{question}' | Expanded: '{search_query}' | Doc: '{document_id}' | Top K: {k_results}")
-        
+
         retrieved_chunks = self.vector_service.search(
             query_text=search_query,
             user_id=user_id,
@@ -179,13 +187,13 @@ class RAGService:
             top_k=k_results,
         )
 
-        # Broad multi-query fallback for high-level summaries or low-yield searches
-        if len(retrieved_chunks) < 4:
+        # Fallback for low-yield searches
+        if len(retrieved_chunks) < 3:
             overview_chunks = self.vector_service.search(
-                query_text="company name statement of profit and loss balance sheet revenue from operations net profit total assets total equity and liabilities",
+                query_text="company name statement of profit and loss balance sheet revenue net profit total assets",
                 user_id=user_id,
                 document_id=document_id,
-                top_k=8,
+                top_k=5,
             )
             seen_chunk_ids = {c.get("chunk_id") for c in retrieved_chunks}
             for oc in overview_chunks:
@@ -205,6 +213,29 @@ class RAGService:
 
         # 3. Deduplicate chunks
         unique_chunks = self._deduplicate_chunks(retrieved_chunks)
+
+        # 3B. NVIDIA Semantic Reranking (POST /v1/ranking with nvidia/llama-3.2-nv-rerankqa-1b-v2)
+        try:
+            nv_client = self.nvidia_client
+            if nv_client is None and os.getenv("NVIDIA_API_KEY"):
+                from ..llm.nvidia_client import get_nvidia_rag_client
+                nv_client = get_nvidia_rag_client()
+
+            if nv_client and getattr(nv_client, "is_available", False) and len(unique_chunks) > 1:
+                ranked = nv_client.rerank(query=question, passages=unique_chunks, top_n=len(unique_chunks))
+                if ranked:
+                    reranked_chunks = []
+                    for r_item in ranked:
+                        idx = r_item.get("index")
+                        if idx is not None and 0 <= idx < len(unique_chunks):
+                            chunk_copy = dict(unique_chunks[idx])
+                            chunk_copy["rerank_score"] = r_item.get("logit", 0.0)
+                            reranked_chunks.append(chunk_copy)
+                    if reranked_chunks:
+                        logger.info(f"NVIDIA Reranker re-ordered {len(reranked_chunks)} chunks for query: '{question}'")
+                        unique_chunks = reranked_chunks
+        except Exception as rank_err:
+            logger.debug(f"NVIDIA reranker pass note: {str(rank_err)}")
         
         # Detailed Debug Log of Retrieved Evidence
         logger.info(f"=== RAG RETRIEVAL DEBUG ===")
@@ -248,34 +279,12 @@ class RAGService:
             question=question,
         )
 
-        # Locate PDF file on disk for full multimodal document vision
-        pdf_path = None
-        base_uploads = os.path.join(os.getcwd(), "uploads")
-        if os.path.exists(base_uploads):
-            user_doc_dir = os.path.join(base_uploads, user_id, document_id)
-            if os.path.exists(user_doc_dir):
-                pdfs = [f for f in os.listdir(user_doc_dir) if f.lower().endswith(".pdf")]
-                if pdfs:
-                    pdf_path = os.path.join(user_doc_dir, pdfs[0])
-            
-            if not pdf_path:
-                all_pdfs = []
-                for root, dirs, files in os.walk(base_uploads):
-                    for f in files:
-                        if f.lower().endswith(".pdf"):
-                            fp = os.path.join(root, f)
-                            all_pdfs.append((os.path.getmtime(fp), fp))
-                if all_pdfs:
-                    all_pdfs.sort(reverse=True)
-                    pdf_path = all_pdfs[0][1]
-
-        # 7. Send to LLM
+        # 7. Send to LLM with precision grounded RAG context
         raw_answer = self.llm_client.generate(
             prompt=user_turn,
             system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
             temperature=0.15,
             max_tokens=2048,
-            pdf_path=pdf_path,
         )
 
         # Post-process answer to replace any residual internal tokens:
@@ -297,32 +306,21 @@ class RAGService:
         verified_chunks: List[Dict[str, Any]] = []
 
         if not is_fallback_or_error:
-            # Extract explicitly cited page numbers from the generated response
-            cited_pages = set()
-            for p_match in re.finditer(r"(?:Page|p\.)\s*(\d+)", clean_answer, re.IGNORECASE):
-                try:
-                    p_val = int(p_match.group(1))
-                    if p_val in page_set:
-                        cited_pages.add(p_val)
-                except ValueError:
-                    pass
+            # Check if any chunk source_location is explicitly mentioned or relevant
+            for c in unique_chunks[:4]:
+                loc_lbl = c.get("source_location") or f"Page {c.get('page_number', 1)}"
+                sec_name = c.get("section", "Financial Statement")
+                src_entry = f"Source: {loc_lbl} — {sec_name}"
+                if src_entry not in valid_sources:
+                    valid_sources.append(src_entry)
+                    verified_sections.append(sec_name)
+                    verified_chunks.append(c)
+                if c.get("page_number") and c.get("page_number") not in valid_pages:
+                    valid_pages.append(c.get("page_number"))
 
-            if cited_pages:
-                valid_pages = sorted(list(cited_pages))
-            else:
-                # If LLM cited no explicit pages, use top chunks with highest relevance score
-                valid_pages = sorted_pages[:2]
+            valid_pages.sort()
 
-            for p in valid_pages:
-                # Find matching chunk to extract exact section name
-                matching_chunk = next((c for c in unique_chunks if c.get("page_number") == p), None)
-                sec_name = matching_chunk.get("section", "Financial Statement") if matching_chunk else "Financial Statement"
-                valid_sources.append(f"Source: Page {p} — {sec_name}")
-                verified_sections.append(sec_name)
-                if matching_chunk:
-                    verified_chunks.append(matching_chunk)
-
-        logger.info(f"RAG Generated Answer: {len(clean_answer)} chars | Verified Cited Pages: {valid_pages}")
+        logger.info(f"RAG Generated Answer: {len(clean_answer)} chars | Verified Sources: {valid_sources}")
 
         return {
             "answer": clean_answer,

@@ -1,6 +1,87 @@
 import re
 from typing import Optional, List, Tuple
 
+# Pre-compiled section patterns for fast scanning
+_RAW_SECTION_PATTERNS = [
+    (
+        r"\bITEM\s+1A[\.\:\s]+R\s*I\s*S\s*K\s+F\s*A\s*C\s*T\s*O\s*R\s*S\b|\bITEM\s+1A[\.\:\s]+RISK\s+FACTORS\b",
+        "Item 1A. Risk Factors",
+    ),
+    (
+        r"\bITEM\s+1B[\.\:\s]+UNRESOLVED\s+STAFF\s+COMMENTS\b",
+        "Item 1B. Unresolved Staff Comments",
+    ),
+    (
+        r"\bITEM\s+1C[\.\:\s]+CYBERSECURITY\b",
+        "Item 1C. Cybersecurity",
+    ),
+    (
+        r"\bITEM\s+1[\.\:\s]+BUSINESS\b",
+        "Item 1. Business",
+    ),
+    (
+        r"\bITEM\s+2[\.\:\s]+PROPERTIES\b",
+        "Item 2. Properties",
+    ),
+    (
+        r"\bITEM\s+3[\.\:\s]+LEGAL\s+PROCEEDINGS\b",
+        "Item 3. Legal Proceedings",
+    ),
+    (
+        r"\bITEM\s+4[\.\:\s]+MINE\s+SAFETY\s+DISCLOSURES\b",
+        "Item 4. Mine Safety Disclosures",
+    ),
+    (
+        r"\bITEM\s+5[\.\:\s]+MARKET\s+FOR\s+REGISTRANT\'?S\s+COMMON\s+EQUITY\b",
+        "Item 5. Market for Common Equity",
+    ),
+    (
+        r"\bITEM\s+7A[\.\:\s]+QUANTITATIVE\s+AND\s+QUALITATIVE\s+DISCLOSURES\b",
+        "Item 7A. Market Risk Disclosures",
+    ),
+    (
+        r"\bITEM\s+7[\.\:\s]+MANAGEMENT\'?S\s+DISCUSSION\s+AND\s+ANALYSIS\b|\bMD&A\b",
+        "Item 7. Management Discussion & Analysis (MD&A)",
+    ),
+    (
+        r"\bITEM\s+8[\.\:\s]+FINANCIAL\s+STATEMENTS\s+AND\s+SUPPLEMENTARY\s+DATA\b",
+        "Item 8. Financial Statements & Supplementary Data",
+    ),
+    (
+        r"\bITEM\s+9A[\.\:\s]+CONTROLS\s+AND\s+PROCEDURES\b",
+        "Item 9A. Controls & Procedures",
+    ),
+    (
+        r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+(?:OPERATIONS|INCOME|EARNINGS)\b",
+        "Consolidated Statements of Operations",
+    ),
+    (
+        r"\bCONSOLIDATED\s+BALANCE\s+SHEETS?\b",
+        "Consolidated Balance Sheets",
+    ),
+    (
+        r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+CASH\s+FLOWS?\b",
+        "Consolidated Statements of Cash Flows",
+    ),
+    (
+        r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+SHAREHOLDERS\'?\s+EQUITY\b",
+        "Consolidated Statements of Equity",
+    ),
+    (
+        r"\bNOTES\s+TO\s+(?:CONSOLIDATED\s+)?FINANCIAL\s+STATEMENTS\b",
+        "Notes to Financial Statements",
+    ),
+    (
+        r"\bEXECUTIVE\s+SUMMARY\b|\bEXECUTIVE\s+OVERVIEW\b",
+        "Executive Summary",
+    ),
+]
+
+_COMPILED_SECTION_PATTERNS = [
+    (re.compile(pattern, re.IGNORECASE), name)
+    for pattern, name in _RAW_SECTION_PATTERNS
+]
+
 
 class SectionDetector:
     """
@@ -10,81 +91,7 @@ class SectionDetector:
     """
 
     DEFAULT_SECTION = "General Information"
-
-    SECTION_PATTERNS: List[Tuple[str, str]] = [
-        (
-            r"\bITEM\s+1A[\.\:\s]+R\s*I\s*S\s*K\s+F\s*A\s*C\s*T\s*O\s*R\s*S\b|\bITEM\s+1A[\.\:\s]+RISK\s+FACTORS\b",
-            "Item 1A. Risk Factors",
-        ),
-        (
-            r"\bITEM\s+1B[\.\:\s]+UNRESOLVED\s+STAFF\s+COMMENTS\b",
-            "Item 1B. Unresolved Staff Comments",
-        ),
-        (
-            r"\bITEM\s+1C[\.\:\s]+CYBERSECURITY\b",
-            "Item 1C. Cybersecurity",
-        ),
-        (
-            r"\bITEM\s+1[\.\:\s]+BUSINESS\b",
-            "Item 1. Business",
-        ),
-        (
-            r"\bITEM\s+2[\.\:\s]+PROPERTIES\b",
-            "Item 2. Properties",
-        ),
-        (
-            r"\bITEM\s+3[\.\:\s]+LEGAL\s+PROCEEDINGS\b",
-            "Item 3. Legal Proceedings",
-        ),
-        (
-            r"\bITEM\s+4[\.\:\s]+MINE\s+SAFETY\s+DISCLOSURES\b",
-            "Item 4. Mine Safety Disclosures",
-        ),
-        (
-            r"\bITEM\s+5[\.\:\s]+MARKET\s+FOR\s+REGISTRANT\'?S\s+COMMON\s+EQUITY\b",
-            "Item 5. Market for Common Equity",
-        ),
-        (
-            r"\bITEM\s+7A[\.\:\s]+QUANTITATIVE\s+AND\s+QUALITATIVE\s+DISCLOSURES\b",
-            "Item 7A. Market Risk Disclosures",
-        ),
-        (
-            r"\bITEM\s+7[\.\:\s]+MANAGEMENT\'?S\s+DISCUSSION\s+AND\s+ANALYSIS\b|\bMD&A\b",
-            "Item 7. Management Discussion & Analysis (MD&A)",
-        ),
-        (
-            r"\bITEM\s+8[\.\:\s]+FINANCIAL\s+STATEMENTS\s+AND\s+SUPPLEMENTARY\s+DATA\b",
-            "Item 8. Financial Statements & Supplementary Data",
-        ),
-        (
-            r"\bITEM\s+9A[\.\:\s]+CONTROLS\s+AND\s+PROCEDURES\b",
-            "Item 9A. Controls & Procedures",
-        ),
-        (
-            r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+(?:OPERATIONS|INCOME|EARNINGS)\b",
-            "Consolidated Statements of Operations",
-        ),
-        (
-            r"\bCONSOLIDATED\s+BALANCE\s+SHEETS?\b",
-            "Consolidated Balance Sheets",
-        ),
-        (
-            r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+CASH\s+FLOWS?\b",
-            "Consolidated Statements of Cash Flows",
-        ),
-        (
-            r"\bCONSOLIDATED\s+STATEMENTS?\s+OF\s+SHAREHOLDERS\'?\s+EQUITY\b",
-            "Consolidated Statements of Equity",
-        ),
-        (
-            r"\bNOTES\s+TO\s+(?:CONSOLIDATED\s+)?FINANCIAL\s+STATEMENTS\b",
-            "Notes to Financial Statements",
-        ),
-        (
-            r"\bEXECUTIVE\s+SUMMARY\b|\bEXECUTIVE\s+OVERVIEW\b",
-            "Executive Summary",
-        ),
-    ]
+    SECTION_PATTERNS = _RAW_SECTION_PATTERNS
 
     def __init__(self, initial_section: Optional[str] = None):
         self.current_section = initial_section or self.DEFAULT_SECTION
@@ -94,8 +101,10 @@ class SectionDetector:
         if not text:
             return None
 
-        for pattern, section_name in self.SECTION_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
+        # Check only first 500 chars of page/block to avoid redundant full-text scanning
+        sample = text[:500] if len(text) > 500 else text
+        for pattern_re, section_name in _COMPILED_SECTION_PATTERNS:
+            if pattern_re.search(sample):
                 return section_name
         return None
 

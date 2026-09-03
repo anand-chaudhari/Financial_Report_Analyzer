@@ -99,16 +99,40 @@ class VectorStoreService:
             logger.debug(f"document_exists check note: {str(e)}")
             return False
 
+    def document_exists_by_hash(self, doc_hash: str, user_id: str) -> Optional[str]:
+        """
+        Checks if vector chunks with the given sha256 doc_hash exist in ChromaDB.
+        Returns the existing document_id if found.
+        """
+        if not doc_hash:
+            return None
+        try:
+            results = self.collection.get(
+                where={"doc_hash": doc_hash},
+                limit=1,
+                include=["metadatas"]
+            )
+            if results and results.get("ids") and len(results["ids"]) > 0:
+                metas = results.get("metadatas")
+                if metas and len(metas) > 0 and metas[0]:
+                    return metas[0].get("document_id") or metas[0].get("report_id")
+                return results["ids"][0].split("_p")[0]
+            return None
+        except Exception as e:
+            logger.debug(f"document_exists_by_hash note: {str(e)}")
+            return None
+
     def add_document(
         self,
         document_id: str,
         user_id: str,
         chunks: List[DocumentChunk],
-        overwrite_if_exists: bool = True
+        overwrite_if_exists: bool = True,
+        doc_hash: Optional[str] = None,
     ) -> int:
         """
         Embeds document chunks using Sentence Transformers and stores them in ChromaDB.
-        Saves both document_id and report_id for exact document scoping.
+        Saves both document_id, report_id, and doc_hash for exact document scoping and instant deduplication.
         """
         if not chunks:
             logger.warning(f"add_document called with 0 chunks for document '{document_id}'.")
@@ -122,9 +146,11 @@ class VectorStoreService:
                 logger.info(f"Document '{document_id}' already indexed. Skipping addition.")
                 return 0
 
+        settings = get_settings()
+        batch_size = getattr(settings, "EMBEDDING_BATCH_SIZE", 256)
         embedder = get_embedding_function()
         texts = [chunk.text for chunk in chunks]
-        raw_embeddings = embedder.encode(texts, batch_size=64, show_progress_bar=False)
+        raw_embeddings = embedder.encode(texts, batch_size=batch_size, show_progress_bar=False)
         embeddings = _safe_to_list(raw_embeddings)
 
         ids: List[str] = []
@@ -145,14 +171,20 @@ class VectorStoreService:
             meta["file_name"] = str(meta.get("file_name", "document.pdf"))
             meta["company_name"] = str(meta.get("company_name", "Unknown"))
             meta["financial_year"] = str(meta.get("financial_year", "FY2024"))
+            if doc_hash:
+                meta["doc_hash"] = doc_hash
             metadatas.append(meta)
 
-        self.collection.upsert(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        # Batch upsert into ChromaDB in chunks of 250 to avoid SQLite transaction thrashing
+        UPSERT_BATCH = 250
+        for i in range(0, len(ids), UPSERT_BATCH):
+            end_i = i + UPSERT_BATCH
+            self.collection.upsert(
+                ids=ids[i:end_i],
+                embeddings=embeddings[i:end_i],
+                documents=documents[i:end_i],
+                metadatas=metadatas[i:end_i]
+            )
 
         logger.info(f"Added {len(chunks)} vector chunks for document '{document_id}' (Company: '{metadatas[0].get('company_name')}').")
         gc.collect()
@@ -255,6 +287,8 @@ class VectorStoreService:
                     "similarity_score": similarity,
                     "page_number": page_num,
                     "section": meta.get("section", "General"),
+                    "source_location": meta.get("source_location", f"Page {page_num}"),
+                    "file_type": meta.get("file_type", "pdf"),
                     "document_id": meta.get("document_id", document_id or ""),
                     "user_id": meta.get("user_id", user_id),
                     "file_name": meta.get("file_name", ""),
@@ -263,82 +297,39 @@ class VectorStoreService:
                     "metadata": meta
                 }
 
-        # 3. Exact Keyword Matching across the target document
+        # 3. Fast Financial Keyword Boost on Candidate Chunks
         try:
-            kw_filters = []
-            if user_id:
-                kw_filters.append({"user_id": user_id})
-            if document_id:
-                kw_filters.append({"document_id": document_id})
+            query_terms = [t.lower() for t in actual_query.split() if len(t) > 2]
+            key_phrases = []
+            q_low = actual_query.lower()
+            if any(k in q_low for k in ["revenue", "sales", "turnover", "income"]):
+                key_phrases.extend(["revenue from operations", "total revenue", "other income", "total income", "turnover", "gross sales", "net sales"])
+            if any(k in q_low for k in ["profit", "pat", "pbt", "loss"]):
+                key_phrases.extend(["profit after tax", "profit before tax", "net profit", "profit for the year", "profit for the period", "total comprehensive income"])
+            if any(k in q_low for k in ["asset", "assets"]):
+                key_phrases.extend(["total assets", "non-current assets", "current assets", "property, plant", "inventories", "trade receivables", "fixed assets"])
+            if any(k in q_low for k in ["liabilit", "debt", "borrowing", "equity"]):
+                key_phrases.extend(["total equity and liabilities", "total liabilities", "borrowings", "equity share capital", "trade payables", "other equity"])
+            if any(k in q_low for k in ["company", "name", "cin", "office"]):
+                key_phrases.extend(["cin", "corporate identification", "registered office", "directors", "auditor", "limited", "private limited"])
 
-            if len(kw_filters) == 1:
-                doc_filter = kw_filters[0]
-            elif len(kw_filters) > 1:
-                doc_filter = {"$and": kw_filters}
-            else:
-                doc_filter = None
+            for c_id, candidate in candidates_map.items():
+                doc_text = candidate.get("text", "")
+                if not doc_text:
+                    continue
+                doc_lower = doc_text.lower()
+                kw_score = 0.0
+                for phrase in key_phrases:
+                    if phrase in doc_lower:
+                        kw_score += 0.25
+                for term in query_terms:
+                    if term in doc_lower:
+                        kw_score += 0.08
 
-            all_doc_records = self.collection.get(
-                where=doc_filter,
-                include=["documents", "metadatas"]
-            )
-            if all_doc_records and all_doc_records.get("documents"):
-                raw_docs = all_doc_records["documents"]
-                raw_metas = all_doc_records.get("metadatas") or [{}] * len(raw_docs)
-                raw_ids = all_doc_records.get("ids") or [f"c_{i}" for i in range(len(raw_docs))]
-
-                query_terms = [t.lower() for t in actual_query.split() if len(t) > 2]
-                
-                # Financial keyword equivalence groups
-                key_phrases = []
-                q_low = actual_query.lower()
-                if "revenue" in q_low or "sales" in q_low or "turnover" in q_low or "income" in q_low:
-                    key_phrases.extend(["revenue from operations", "total revenue", "other income", "total income", "turnover", "gross sales", "net sales"])
-                if "profit" in q_low or "pat" in q_low or "pbt" in q_low or "loss" in q_low:
-                    key_phrases.extend(["profit after tax", "profit before tax", "net profit", "profit for the year", "profit for the period", "total comprehensive income"])
-                if "asset" in q_low or "assets" in q_low:
-                    key_phrases.extend(["total assets", "non-current assets", "current assets", "property, plant", "inventories", "trade receivables", "fixed assets"])
-                if "liabilit" in q_low or "debt" in q_low or "borrowing" in q_low or "equity" in q_low:
-                    key_phrases.extend(["total equity and liabilities", "total liabilities", "borrowings", "equity share capital", "trade payables", "other equity"])
-                if "company" in q_low or "name" in q_low or "cin" in q_low or "office" in q_low:
-                    key_phrases.extend(["cin", "corporate identification", "registered office", "directors", "auditor", "limited", "private limited"])
-
-                for doc_text, meta, c_id in zip(raw_docs, raw_metas, raw_ids):
-                    if not doc_text:
-                        continue
-                    doc_lower = doc_text.lower()
-                    
-                    # Compute keyword relevance boost
-                    kw_score = 0.0
-                    for phrase in key_phrases:
-                        if phrase in doc_lower:
-                            kw_score += 0.35
-                    for term in query_terms:
-                        if term in doc_lower:
-                            kw_score += 0.1
-
-                    if kw_score > 0.1:
-                        page_num = meta.get("page_number", 1)
-                        target_pages.add(page_num)
-                        
-                        if c_id in candidates_map:
-                            candidates_map[c_id]["similarity_score"] = min(1.0, candidates_map[c_id]["similarity_score"] + kw_score * 0.4)
-                        else:
-                            candidates_map[c_id] = {
-                                "chunk_id": c_id,
-                                "text": doc_text,
-                                "similarity_score": min(0.95, 0.65 + kw_score * 0.3),
-                                "page_number": page_num,
-                                "section": meta.get("section", "Financial Statements"),
-                                "document_id": meta.get("document_id", document_id or ""),
-                                "user_id": meta.get("user_id", user_id),
-                                "file_name": meta.get("file_name", ""),
-                                "company_name": meta.get("company_name", ""),
-                                "financial_year": meta.get("financial_year", ""),
-                                "metadata": meta
-                            }
+                if kw_score > 0.0:
+                    candidate["similarity_score"] = min(1.0, candidate.get("similarity_score", 0.0) + kw_score * 0.3)
         except Exception as kw_err:
-            logger.debug(f"Keyword search note: {str(kw_err)}")
+            logger.debug(f"Keyword boost note: {str(kw_err)}")
 
         # 4. Surrounding Page Expansion (Include adjacent chunks on top matched pages)
         try:

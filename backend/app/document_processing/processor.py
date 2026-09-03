@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Union, Optional, Callable
 
 from .pdf_extractor import PDFExtractor, ExtractedPage
@@ -6,6 +6,16 @@ from .cleaner import TextCleaner
 from .section_detector import SectionDetector
 from .chunker import DocumentChunker, DocumentChunk
 from .ocr_extension import OCRExtensionHook
+from .file_detector import FileTypeDetector, UnsupportedFileFormatException
+from .models import ExtractedDocument
+from .extractors import (
+    PDFExtractorAdapter,
+    ExcelExtractor,
+    CSVExtractor,
+    DocxExtractor,
+    TextMarkdownExtractor,
+    JSONExtractor,
+)
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -22,14 +32,20 @@ class ProcessingResult:
     non_empty_pages: int
     scanned_pages: int
     total_chunks: int
-    pages: List[ExtractedPage]
-    chunks: List[DocumentChunk]
+    pages: List[ExtractedPage] = field(default_factory=list)
+    chunks: List[DocumentChunk] = field(default_factory=list)
+    extracted_doc: Optional[ExtractedDocument] = None
+    file_type: str = "pdf"
+    currency: Optional[str] = None
+    units: Optional[str] = None
 
 
 class DocumentProcessor:
     """
-    Main orchestrator pipeline class for Python PDF document processing:
-    PDF → page extraction → text cleaning → section detection → chunking → metadata creation.
+    Main orchestrator pipeline class for Multi-Format Financial Document Processing:
+    Supports PDF, XLSX, XLS, CSV, DOCX, TXT, MD, and JSON.
+    Extracts structured content, preserves financial tables/metadata, normalizes to ExtractedDocument,
+    and produces high-precision semantic vector chunks.
     """
 
     def __init__(
@@ -42,6 +58,161 @@ class DocumentProcessor:
         self.cleaner = TextCleaner()
         self.section_detector = SectionDetector()
         self.chunker = DocumentChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        
+        # Format extractors registry
+        self.pdf_extractor_adapter = PDFExtractorAdapter()
+        self.excel_extractor = ExcelExtractor()
+        self.csv_extractor = CSVExtractor()
+        self.docx_extractor = DocxExtractor()
+        self.text_md_extractor = TextMarkdownExtractor()
+        self.json_extractor = JSONExtractor()
+
+    def process_document(
+        self,
+        file_source: Union[bytes, str],
+        document_id: str,
+        user_id: str,
+        file_name: str = "document.pdf",
+        company_name: Optional[str] = None,
+        financial_year: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        on_stage_update: Optional[Callable[[str, int, Optional[str]], None]] = None,
+    ) -> ProcessingResult:
+        """
+        Universal processing pipeline for any supported financial document format.
+        Detects file type, dispatches to format-specific extractor, normalizes representation,
+        and chunks into semantic financial blocks with exact source locations.
+        """
+        # 1. Detect and validate file format without reading full file into memory
+        format_type, file_size = FileTypeDetector.validate_file(
+            file_bytes_or_path=file_source,
+            filename=file_name,
+            mime_type=mime_type
+        )
+
+        logger.info(f"DocumentProcessor: Processing '{file_name}' as format '{format_type.upper()}' (ID: {document_id}, User: {user_id}, Size: {file_size / (1024*1024):.2f} MB).")
+
+        # 2. Extract content using format-specific extractor
+        extracted_doc: ExtractedDocument
+        if format_type == "pdf":
+            # Pass file_source directly (path or bytes) to prevent RAM ballooning on large PDFs
+            extracted_doc = self.pdf_extractor_adapter.extract(
+                file_bytes=file_source,
+                document_id=document_id,
+                filename=file_name,
+                user_id=user_id,
+                company_name=company_name,
+                financial_year=financial_year,
+                on_progress=on_stage_update
+            )
+        else:
+            if isinstance(file_source, str):
+                with open(file_source, "rb") as f:
+                    file_bytes = f.read()
+            else:
+                file_bytes = file_source
+
+            if on_stage_update:
+                on_stage_update(
+                    "Extracting",
+                    25,
+                    f"Extracting {format_type.upper()} tables and structure from '{file_name}'"
+                )
+
+            if format_type in ("xlsx", "xls"):
+                extracted_doc = self.excel_extractor.extract(
+                    file_bytes=file_bytes,
+                    document_id=document_id,
+                    filename=file_name,
+                    user_id=user_id,
+                    company_name=company_name,
+                    financial_year=financial_year,
+                    on_progress=on_stage_update
+                )
+            elif format_type == "csv":
+                extracted_doc = self.csv_extractor.extract(
+                    file_bytes=file_bytes,
+                    document_id=document_id,
+                    filename=file_name,
+                    user_id=user_id,
+                    company_name=company_name,
+                    financial_year=financial_year,
+                    on_progress=on_stage_update
+                )
+            elif format_type == "docx":
+                extracted_doc = self.docx_extractor.extract(
+                    file_bytes=file_bytes,
+                    document_id=document_id,
+                    filename=file_name,
+                    user_id=user_id,
+                    company_name=company_name,
+                    financial_year=financial_year,
+                    on_progress=on_stage_update
+                )
+            elif format_type in ("md", "txt"):
+                extracted_doc = self.text_md_extractor.extract(
+                    file_bytes=file_bytes,
+                    document_id=document_id,
+                    filename=file_name,
+                    user_id=user_id,
+                    company_name=company_name,
+                    financial_year=financial_year,
+                    on_progress=on_stage_update
+                )
+            elif format_type == "json":
+                extracted_doc = self.json_extractor.extract(
+                    file_bytes=file_bytes,
+                    document_id=document_id,
+                    filename=file_name,
+                    user_id=user_id,
+                    company_name=company_name,
+                    financial_year=financial_year,
+                    on_progress=on_stage_update
+                )
+            else:
+                raise UnsupportedFileFormatException(f"Unsupported file format: {format_type}")
+
+        # Stage: Chunking
+        if on_stage_update:
+            on_stage_update(
+                "Chunking",
+                65,
+                f"Generating financial vector chunks preserving {format_type.upper()} table structure"
+            )
+
+        # 3. Chunk normalized document
+        chunks = self.chunker.chunk_document(
+            doc=extracted_doc,
+            user_id=user_id,
+        )
+
+        final_company = extracted_doc.company_name or company_name or "Financial Report"
+        final_year = extracted_doc.financial_year or financial_year or "FY2026"
+        total_units = extracted_doc.pages_or_sheets_count
+        non_empty_units = sum(1 for s in extracted_doc.sections if any(b.content.strip() for b in s.blocks) or (s.raw_text or "").strip())
+        scanned_units = sum(1 for s in extracted_doc.sections if (s.metadata or {}).get("is_scanned"))
+
+        logger.info(
+            f"DocumentProcessor complete for '{file_name}' ({format_type.upper()}): "
+            f"{total_units} section/pages/sheets ({non_empty_units} non-empty, {scanned_units} scanned) -> {len(chunks)} chunks created."
+        )
+
+        return ProcessingResult(
+            document_id=document_id,
+            user_id=user_id,
+            file_name=file_name,
+            company_name=final_company,
+            financial_year=final_year,
+            total_pages=total_units,
+            non_empty_pages=non_empty_units,
+            scanned_pages=scanned_units,
+            total_chunks=len(chunks),
+            chunks=chunks,
+            extracted_doc=extracted_doc,
+            file_type=format_type,
+            currency=extracted_doc.currency,
+            units=extracted_doc.units,
+        )
 
     def process_pdf(
         self,
@@ -53,97 +224,14 @@ class DocumentProcessor:
         financial_year: str = "FY2024",
         on_stage_update: Optional[Callable[[str, int, Optional[str]], None]] = None,
     ) -> ProcessingResult:
-        """
-        Runs the complete PDF processing pipeline:
-        1. Extract text page-by-page (preserving 1-indexed page numbers).
-        2. Detect empty and scanned pages.
-        3. Clean text per page while preserving financial figures and headings.
-        4. Detect financial sections statefully.
-        5. Generate semantic chunks with complete metadata attached.
-        """
-        logger.info(f"DocumentProcessor: Processing PDF for document_id='{document_id}', user_id='{user_id}'.")
-
-        # Stage: Extracting text
-        if on_stage_update:
-            on_stage_update("Extracting text", 20, "Extracting text page-by-page from document")
-
-        pages = self.extractor.extract(pdf_source)
-        total_pages = len(pages)
-        non_empty_pages = sum(1 for p in pages if not p.is_empty)
-        scanned_pages = sum(1 for p in pages if p.is_scanned)
-
-        # Stage: Extracting tables
-        if on_stage_update:
-            on_stage_update("Extracting tables", 35, "Parsing financial statement tables and structural grids")
-
-        # Stage: OCR (only when required)
-        if scanned_pages > 0 and on_stage_update:
-            on_stage_update("OCR (only when required)", 45, f"Running OCR enhancement on {scanned_pages} scanned page(s)")
-
-        # Stage: Creating chunks
-        if on_stage_update:
-            on_stage_update("Creating chunks", 60, "Generating semantic section chunks and financial context blocks")
-
-        chunks = self.chunker.chunk_pages(
-            pages=pages,
+        """Backward-compatible process_pdf method."""
+        return self.process_document(
+            file_source=pdf_source,
             document_id=document_id,
             user_id=user_id,
             file_name=file_name,
             company_name=company_name,
             financial_year=financial_year,
-        )
-
-        # Fallback if document is image-heavy or scanned
-        if len(chunks) == 0 and len(pages) > 0:
-            logger.warning("No standard chunks generated. Creating per-page fallback chunks...")
-            for page in pages:
-                fallback_text = (page.raw_text or "").strip()
-                if not fallback_text:
-                    fallback_text = f"Financial Statement Filing - Page {page.page_number} ({company_name}, {financial_year})"
-                chunk_id = f"{document_id}_p{page.page_number}_c0"
-                metadata = {
-                    "document_id": document_id,
-                    "user_id": user_id,
-                    "file_name": file_name,
-                    "company_name": company_name,
-                    "financial_year": financial_year,
-                    "page_number": page.page_number,
-                    "section": "Financial Statements",
-                    "chunk_id": chunk_id,
-                    "chunk_index": 0,
-                    "char_length": len(fallback_text),
-                    "has_tables": True,
-                }
-                chunks.append(
-                    DocumentChunk(
-                        chunk_id=chunk_id,
-                        document_id=document_id,
-                        user_id=user_id,
-                        file_name=file_name,
-                        company_name=company_name,
-                        financial_year=financial_year,
-                        page_number=page.page_number,
-                        section="Financial Statements",
-                        text=fallback_text,
-                        metadata=metadata,
-                    )
-                )
-
-        logger.info(
-            f"DocumentProcessor complete: {total_pages} total pages ({non_empty_pages} non-empty, "
-            f"{scanned_pages} scanned) -> {len(chunks)} chunks created."
-        )
-
-        return ProcessingResult(
-            document_id=document_id,
-            user_id=user_id,
-            file_name=file_name,
-            company_name=company_name,
-            financial_year=financial_year,
-            total_pages=total_pages,
-            non_empty_pages=non_empty_pages,
-            scanned_pages=scanned_pages,
-            total_chunks=len(chunks),
-            pages=pages,
-            chunks=chunks,
+            mime_type="application/pdf",
+            on_stage_update=on_stage_update,
         )

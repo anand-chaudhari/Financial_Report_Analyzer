@@ -270,9 +270,18 @@ class SummaryService:
 
         def get_sec(key: str, fallback_title: str) -> Dict[str, Any]:
             sec = parsed_json.get(key, {}) if parsed_json and isinstance(parsed_json, dict) else {}
-            txt = sec.get("text", "")
-            pgs = sec.get("pages", sorted_pages[:2])
-            val = sec.get("value")
+            if isinstance(sec, str):
+                txt = sec
+                pgs = sorted_pages[:2]
+                val = None
+            elif isinstance(sec, dict):
+                txt = sec.get("text", "")
+                pgs = sec.get("pages", sorted_pages[:2])
+                val = sec.get("value")
+            else:
+                txt = ""
+                pgs = sorted_pages[:2]
+                val = None
 
             if not txt or len(txt.strip()) < 10:
                 txt = f"{fallback_title} detailed in the {fin_year} annual report for {company_name}."

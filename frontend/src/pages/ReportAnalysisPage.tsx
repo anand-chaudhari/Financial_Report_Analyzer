@@ -33,6 +33,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { FinancialOverviewSection } from '../components/financial/FinancialOverviewSection';
+import { RichMarkdownRenderer } from '../components/common/RichMarkdownRenderer';
 
 export const ReportAnalysisPage: React.FC = () => {
   const { reportId } = useParams<{ reportId: string }>();
@@ -206,18 +207,22 @@ export const ReportAnalysisPage: React.FC = () => {
                       </div>
                     )}
                     <div
-                      className={`max-w-2xl rounded-3xl p-5 text-sm leading-relaxed ${
+                      className={`max-w-3xl rounded-3xl p-5 text-sm leading-relaxed ${
                         msg.sender === 'user'
-                          ? 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white rounded-br-none shadow-md shadow-emerald-950/20 dark:shadow-emerald-950/40'
-                          : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-bl-none shadow-sm'
+                          ? 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white rounded-br-none shadow-md shadow-emerald-950/20 dark:shadow-emerald-950/40 font-medium'
+                          : 'bg-slate-50 dark:bg-slate-950/90 border border-slate-200/90 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-bl-none shadow-sm backdrop-blur-xs'
                       }`}
                     >
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      {msg.sender === 'user' ? (
+                        <p className="whitespace-pre-wrap font-medium">{msg.content}</p>
+                      ) : (
+                        <RichMarkdownRenderer content={msg.content} />
+                      )}
 
                       {/* Render Citations if present */}
                       {msg.citations && msg.citations.length > 0 && (
-                        <div className="mt-3.5 pt-3 border-t border-slate-200 dark:border-slate-800">
-                          <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block mb-2">
+                        <div className="mt-4 pt-3 border-t border-slate-200/80 dark:border-slate-800/80">
+                          <span className="text-[11px] font-extrabold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block mb-2">
                             Verified Source Pages:
                           </span>
                           <div className="flex flex-wrap gap-2">

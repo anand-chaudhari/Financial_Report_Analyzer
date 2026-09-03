@@ -6,6 +6,7 @@ from ..schemas.chat_schema import ChatResponse, ChatMessageItem, Citation
 from ..rag.rag_service import RAGService
 from ..rag.prompts import FINSIGHT_CONVERSATIONAL_SYSTEM_PROMPT
 from ..services.conversation_service import ConversationService
+from .cache_service import get_ai_cache_service
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -14,7 +15,7 @@ logger = setup_logger(__name__)
 class ChatService:
     """
     Context-Aware FinSight AI Chat Service.
-    Implements modular intent classification layer before the existing grounded RAG pipeline.
+    Implements modular intent classification layer and persistent RAG query caching.
     """
 
     def __init__(
@@ -24,6 +25,7 @@ class ChatService:
     ):
         self.rag_service = rag_service or RAGService()
         self.conv_service = conv_service or ConversationService()
+        self.cache_service = get_ai_cache_service()
 
     def _classify_intent(
         self,
@@ -251,13 +253,26 @@ class ChatService:
             if intent == "FOLLOW_UP":
                 rag_query = self._resolve_follow_up_query(question, history_to_supply)
 
-            rag_output = self.rag_service.answer_question(
+            cache_key = self.cache_service.build_cache_key(
+                "chat_rag",
                 user_id=user_id,
                 document_id=active_doc_id,
-                question=rag_query,
-                conversation_history=history_to_supply,
-                top_k=top_k,
+                extra_params={"q": rag_query.strip().lower(), "hist_count": len(history_to_supply)}
             )
+
+            cached_rag = self.cache_service.get_cached_result(cache_key)
+            if cached_rag:
+                rag_output = cached_rag
+            else:
+                rag_output = self.rag_service.answer_question(
+                    user_id=user_id,
+                    document_id=active_doc_id,
+                    question=rag_query,
+                    conversation_history=history_to_supply,
+                    top_k=top_k,
+                )
+                if rag_output and rag_output.get("answer"):
+                    self.cache_service.save_result(cache_key, "chat_rag", user_id, [active_doc_id], rag_output)
 
             page_list = rag_output.get("pages", [])
             section_list = rag_output.get("sections", [])

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: str = "gemini"
     GEMINI_API_KEY: str = ""
+    NVIDIA_API_KEY: str = ""
+    NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    NVIDIA_MODELS: str = "moonshotai/kimi-k3,meta/llama-3.3-70b-instruct,nvidia/llama-3.1-nemotron-70b-instruct,meta/llama-3.1-8b-instruct,mistralai/mixtral-8x7b-instruct-v0.1"
     GROQ_API_KEY: str = ""  # kept for legacy imports only
     OPENAI_API_KEY: str = ""
     DEFAULT_LLM_MODEL: str = "gemini-1.5-flash"
@@ -31,12 +34,15 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     DEFAULT_TOP_K: int = 4
     
-    # Document Processing
+    # Document Processing (Localhost High Performance)
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
-    MAX_UPLOAD_SIZE_MB: int = 25
-    MAX_PDF_PAGES: int = 150
-    PDF_PROCESSING_TIMEOUT_SEC: int = 60
+    MAX_UPLOAD_SIZE_MB: int = 250
+    MAX_PDF_PAGES: int = 2000
+    PDF_PROCESSING_TIMEOUT_SEC: int = 120
+    PARALLEL_EXTRACTION_WORKERS: int = 8
+    EMBEDDING_BATCH_SIZE: int = 256
+    OCR_MAX_PAGES: int = 50
     
     # Firebase Settings
     FIREBASE_CREDENTIALS_PATH: str = "./serviceAccountKey.json"

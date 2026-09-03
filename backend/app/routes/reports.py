@@ -21,30 +21,38 @@ async def upload_report(
     file: UploadFile = File(...),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Uploads a PDF financial report and triggers background parsing and vector indexing."""
-    settings = get_settings()
-
-    if not file.filename.lower().endswith(".pdf"):
+    # Read File Bytes
+    try:
+        file_bytes = await file.read()
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are supported."
+            detail="Failed to read uploaded file."
         )
 
-    file_bytes = await file.read()
-    if len(file_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+    # Validate file format and size
+    from ..document_processing.file_detector import FileTypeDetector, UnsupportedFileFormatException
+    try:
+        detected_fmt, file_size = FileTypeDetector.validate_file(
+            file_bytes=file_bytes,
+            filename=file.filename or "unknown",
+            mime_type=file.content_type
+        )
+    except UnsupportedFileFormatException as uf_err:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size exceeds maximum limit of {settings.MAX_UPLOAD_SIZE_MB}MB."
+            detail=str(uf_err)
         )
 
     cleaned_filename = sanitize_filename(file.filename)
     user_id = current_user["uid"]
 
-    # Process PDF and index into ChromaDB
-    report = report_service.process_and_index_pdf(
+    # Process Document and index into ChromaDB
+    report = report_service.process_and_index_document(
         file_bytes=file_bytes,
         filename=cleaned_filename,
-        user_id=user_id
+        user_id=user_id,
+        mime_type=file.content_type
     )
 
     return ApiResponse(
