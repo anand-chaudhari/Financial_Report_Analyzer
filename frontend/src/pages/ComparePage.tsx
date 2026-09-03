@@ -23,6 +23,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { API_BASE_URL } from '../utils/constants';
+import RichMarkdownRenderer from '../components/common/RichMarkdownRenderer';
 
 interface ComparisonData {
   document_a: {

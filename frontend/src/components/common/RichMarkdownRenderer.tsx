@@ -24,12 +24,8 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-export interface SourceMetadata {
-  page_number: number;
-  section: string;
-  document_name?: string;
-  snippet?: string;
-}
+import { SourceMetadata } from '../../services/conversationService';
+export type { SourceMetadata };
 
 /**
  * Formats inline text with bold, italic, code, financial metrics, and interactive citation badges
