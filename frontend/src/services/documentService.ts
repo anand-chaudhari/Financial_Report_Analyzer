@@ -7,12 +7,12 @@ export const documentService = {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Call /api/documents/upload with 300,000ms (5 min) timeout for PDF processing + SentenceTransformer vector indexing
+    // Call /api/documents/upload with 60,000ms timeout since endpoint returns immediately after queuing
     const response = await apiClient.post<any>('/documents/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      timeout: 300000,
+      timeout: 60000,
     });
 
     const resData = response.data;
@@ -32,7 +32,10 @@ export const documentService = {
       fileSize: size,
       total_pages: pages,
       pageCount: pages,
-      status: item.status || 'completed',
+      status: item.status || 'processing',
+      currentStage: item.currentStage || 'Queued',
+      stageMessage: item.stageMessage || 'Queued for processing',
+      progressPercent: item.progressPercent || 5,
       uploaded_at: item.uploadedAt || item.uploaded_at || new Date().toISOString(),
       uploadedAt: item.uploadedAt || item.uploaded_at || new Date().toISOString(),
       company_name: item.companyName || item.company_name || name.replace('.pdf', '').replace(/_/g, ' '),
@@ -46,6 +49,17 @@ export const documentService = {
     };
 
     return reportItem;
+  },
+
+  async getDocumentStatus(documentId: string): Promise<any> {
+    try {
+      const response = await apiClient.get<any>(`/documents/${documentId}/status`, { timeout: 10000 });
+      const resData = response.data;
+      return resData.data || resData;
+    } catch (e) {
+      console.warn(`Failed to fetch status for document '${documentId}':`, e);
+      return null;
+    }
   },
 
   async getDocuments(): Promise<ReportItem[]> {
@@ -71,6 +85,9 @@ export const documentService = {
           total_pages: pages,
           pageCount: pages,
           status: item.status || 'completed',
+          currentStage: item.currentStage || (item.status === 'completed' ? 'Ready' : 'Processing'),
+          stageMessage: item.stageMessage || '',
+          progressPercent: item.progressPercent !== undefined ? item.progressPercent : (item.status === 'completed' ? 100 : 50),
           uploaded_at: item.uploadedAt || item.uploaded_at || new Date().toISOString(),
           uploadedAt: item.uploadedAt || item.uploaded_at || new Date().toISOString(),
           company_name: item.companyName || item.company_name || name.replace('.pdf', '').replace(/_/g, ' '),

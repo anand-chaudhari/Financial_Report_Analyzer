@@ -102,63 +102,57 @@ async def upload_document(
             detail=f"Invalid file: {str(val_err)}"
         )
 
-    logger.info(f"Processing streamed upload for user '{user_id}': '{cleaned_filename}' ({file_size / (1024*1024):.2f} MB)")
+    logger.info(f"Received upload stream for user '{user_id}': '{cleaned_filename}' ({file_size / (1024*1024):.2f} MB)")
 
-    # 3. Process & Store Document (Extract metadata, save to Firestore asynchronously without blocking event loop)
+    # 3. Prepare Upload Record (Instant pre-flight & file saving < 1 sec)
     try:
-        doc = await asyncio.wait_for(
-            asyncio.to_thread(
-                document_service.process_and_save_upload,
-                file_path=temp_file_path,
-                filename=cleaned_filename,
-                user_id=user_id,
-            ),
-            timeout=_UPLOAD_TIMEOUT_SEC,
+        from ..services.background_worker import submit_background_processing
+
+        doc_model, is_completed = document_service.prepare_upload_record(
+            temp_file_path=temp_file_path,
+            filename=cleaned_filename,
+            user_id=user_id,
         )
+
+        # Offload 600+ page heavy processing to background worker pool if not already completed/reused
+        if not is_completed:
+            submit_background_processing(
+                doc_model.documentId,
+                document_service.process_document_background,
+                document_id=doc_model.documentId,
+                user_id=user_id,
+            )
 
         metadata = DocumentMetadata(
-            documentId=doc.documentId,
-            userId=doc.userId,
-            fileName=doc.fileName,
-            companyName=doc.companyName,
-            financialYear=doc.financialYear,
-            pageCount=doc.pageCount,
-            status=doc.status,
-            currentStage=doc.currentStage,
-            stageMessage=doc.stageMessage,
-            progressPercent=doc.progressPercent,
-            storageUrl=doc.storageUrl,
-            uploadedAt=doc.uploadedAt,
-            processedAt=doc.processedAt,
-            fileSize=doc.fileSize,
-            errorMessage=doc.errorMessage,
+            documentId=doc_model.documentId,
+            userId=doc_model.userId,
+            fileName=doc_model.fileName,
+            companyName=doc_model.companyName,
+            financialYear=doc_model.financialYear,
+            pageCount=doc_model.pageCount,
+            status=doc_model.status,
+            currentStage=doc_model.currentStage,
+            stageMessage=doc_model.stageMessage,
+            progressPercent=doc_model.progressPercent,
+            storageUrl=doc_model.storageUrl,
+            uploadedAt=doc_model.uploadedAt,
+            processedAt=doc_model.processedAt,
+            fileSize=doc_model.fileSize,
+            errorMessage=doc_model.errorMessage,
         )
 
+        msg = "Document loaded instantly from cache." if is_completed else "Document uploaded. Local background processing started."
         return DocumentUploadResponse(
             success=True,
-            message="Document uploaded and processed successfully.",
+            message=msg,
             data=metadata
         )
 
-    except asyncio.TimeoutError:
-        timeout_min = int(_UPLOAD_TIMEOUT_SEC // 60)
-        logger.error(
-            f"Document processing timed out after {_UPLOAD_TIMEOUT_SEC:.0f}s "
-            f"for user '{user_id}': '{cleaned_filename}'"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=(
-                f"Document processing exceeded the {timeout_min}-minute time limit. "
-                "This usually happens with very large PDFs (300+ pages) or slow embedding. "
-                "Please try again — the document may already be partially indexed and will process faster on retry."
-            ),
-        )
     except Exception as e:
-        logger.error(f"Error processing document upload: {str(e)}", exc_info=True)
+        logger.error(f"Error initializing document upload: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing document: {str(e)}"
+            detail=f"Error initializing upload: {str(e)}"
         )
     finally:
         # Temporary file cleanup

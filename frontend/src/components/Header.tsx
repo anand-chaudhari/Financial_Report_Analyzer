@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
+import { useReportContext } from '../context/ReportContext';
 import { MOCK_NOTIFICATIONS, MockNotification } from '../utils/mockData';
 import { toTitleCase } from '../utils/formatters';
 import {
@@ -12,8 +13,8 @@ import {
   Settings,
   Check,
   Menu,
-  FileText,
-  TrendingUp,
+  Loader2,
+  Sparkles,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -29,6 +30,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { activeProcessingReport } = useReportContext();
   const navigate = useNavigate();
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -101,6 +103,22 @@ export const Header: React.FC<HeaderProps> = ({
               Financial Report Intelligence Workspace
             </span>
           </div>
+
+          {/* Persistent Background Worker Progress Indicator */}
+          {activeProcessingReport && (
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs animate-fade-in">
+              <Loader2 className="w-3.5 h-3.5 text-emerald-500 animate-spin flex-shrink-0" />
+              <span className="font-semibold truncate max-w-[200px]">
+                Processing {activeProcessingReport.fileName || activeProcessingReport.filename}
+              </span>
+              <span className="font-mono font-bold text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-500/20">
+                {activeProcessingReport.progressPercent || 25}%
+              </span>
+              <span className="text-[11px] text-emerald-600/80 dark:text-emerald-400/80 truncate max-w-[140px]">
+                ({activeProcessingReport.currentStage || 'Indexing'})
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Right Actions: Notifications, Theme Toggle, Profile */}

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { ReportItem } from '../types/report';
 import { documentService } from '../services/documentService';
 import { useAuthContext } from './AuthContext';
@@ -8,6 +8,7 @@ interface ReportContextType {
   activeReport: ReportItem | null;
   loading: boolean;
   error: string | null;
+  activeProcessingReport: ReportItem | null;
   fetchReports: () => Promise<void>;
   uploadReport: (file: File) => Promise<ReportItem>;
   setActiveReport: (report: ReportItem | null) => void;
@@ -22,6 +23,7 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [activeReport, setActiveReport] = useState<ReportItem | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchReports = useCallback(async () => {
     setLoading(true);
@@ -38,26 +40,78 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeReport]);
+
+  const activeProcessingReport = reports.find((r) => r.status === 'processing' || r.status === 'uploaded') || null;
+
+  // Background polling loop for documents currently being processed
+  useEffect(() => {
+    const processingDoc = reports.find((r) => r.status === 'processing' || r.status === 'uploaded');
+
+    if (!processingDoc) {
+      if (pollingTimerRef.current) {
+        clearInterval(pollingTimerRef.current);
+        pollingTimerRef.current = null;
+      }
+      return;
+    }
+
+    const pollDocId = processingDoc.id || processingDoc.documentId;
+    if (!pollDocId) return;
+
+    if (!pollingTimerRef.current) {
+      pollingTimerRef.current = setInterval(async () => {
+        const updatedStatus = await documentService.getDocumentStatus(pollDocId);
+        if (updatedStatus) {
+          setReports((prev) =>
+            prev.map((r) => {
+              if (r.id === pollDocId || r.documentId === pollDocId) {
+                return {
+                  ...r,
+                  status: updatedStatus.status || r.status,
+                  currentStage: updatedStatus.currentStage || r.currentStage,
+                  stageMessage: updatedStatus.stageMessage || r.stageMessage,
+                  progressPercent: updatedStatus.progressPercent !== undefined ? updatedStatus.progressPercent : r.progressPercent,
+                  pageCount: updatedStatus.pageCount || r.pageCount,
+                  companyName: updatedStatus.companyName || r.companyName,
+                  company_name: updatedStatus.companyName || r.company_name,
+                  financialYear: updatedStatus.financialYear || r.financialYear,
+                };
+              }
+              return r;
+            })
+          );
+
+          if (updatedStatus.status === 'completed' || updatedStatus.status === 'failed' || updatedStatus.status === 'ready') {
+            if (pollingTimerRef.current) {
+              clearInterval(pollingTimerRef.current);
+              pollingTimerRef.current = null;
+            }
+            fetchReports();
+          }
+        }
+      }, 3000);
+    }
+
+    return () => {
+      if (pollingTimerRef.current) {
+        clearInterval(pollingTimerRef.current);
+        pollingTimerRef.current = null;
+      }
+    };
+  }, [reports, fetchReports]);
 
   const uploadReport = async (file: File): Promise<ReportItem> => {
-    setLoading(true);
     setError(null);
     try {
       const newReport = await documentService.uploadDocument(file);
       setReports((prev) => [newReport, ...prev.filter((r) => r.id !== newReport.id)]);
       setActiveReport(newReport);
-      // Auto-refresh reports list from server to ensure state is synchronized
-      await fetchReports();
       return newReport;
     } catch (err: any) {
-      // Auto-refresh even on error in case server completed processing
-      await fetchReports();
       const msg = err?.response?.data?.detail || err?.message || 'Failed to upload PDF report';
       setError(msg);
       throw new Error(msg);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -73,12 +127,10 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  // Only fetch reports when auth has resolved AND user is logged in
   useEffect(() => {
     if (!authLoading && user) {
       fetchReports();
     } else if (!authLoading && !user) {
-      // User is logged out — clear report state
       setReports([]);
       setActiveReport(null);
     }
@@ -91,6 +143,7 @@ export const ReportProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         activeReport,
         loading,
         error,
+        activeProcessingReport,
         fetchReports,
         uploadReport,
         setActiveReport,
