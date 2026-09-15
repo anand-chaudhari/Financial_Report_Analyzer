@@ -66,6 +66,8 @@ export interface FinancialChartData {
   cash_flow_chart?: CashFlowPoint[];
   yoy_comparison_chart?: YoYComparisonPoint[];
   key_ratios?: KeyRatio[];
+  executive_insights?: string[];
+  executive_overview?: string;
   extracted_at?: string;
 }
 

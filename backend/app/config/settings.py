@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 200
     MAX_UPLOAD_SIZE_MB: int = 250
     MAX_PDF_PAGES: int = 2000
-    PDF_PROCESSING_TIMEOUT_SEC: int = 120
+    # Total wall-clock budget for the full upload pipeline:
+    # SHA-256 hash + metadata + extraction + OCR + embedding + ChromaDB indexing.
+    # Large annual reports (300+ pages, 1000+ chunks) can take 5-8 minutes locally.
+    PDF_PROCESSING_TIMEOUT_SEC: int = 600
     PARALLEL_EXTRACTION_WORKERS: int = 8
     EMBEDDING_BATCH_SIZE: int = 256
     OCR_MAX_PAGES: int = 50

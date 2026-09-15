@@ -37,6 +37,14 @@ import {
   Printer,
   Presentation,
   Layers,
+  Sparkles,
+  ShieldCheck,
+  CheckCircle2,
+  HelpCircle,
+  Activity,
+  MessageSquareText,
+  Building2,
+  Calendar,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -81,8 +89,8 @@ export const AnalyticsPage: React.FC = () => {
       })
       .catch((err) => {
         if (isMounted) {
-          logger_error_fallback(err);
-          setError('Could not fetch financial analytics data.');
+          console.error('Financial chart fetch error:', err);
+          setError('Could not fetch financial analytics data. Please try refreshing.');
           setLoading(false);
         }
       });
@@ -91,10 +99,6 @@ export const AnalyticsPage: React.FC = () => {
       isMounted = false;
     };
   }, [selectedReportId]);
-
-  const logger_error_fallback = (err: any) => {
-    console.error('Financial chart fetch error:', err);
-  };
 
   const chartTheme = {
     grid: theme === 'dark' ? '#334155' : '#e2e8f0',
@@ -117,26 +121,43 @@ export const AnalyticsPage: React.FC = () => {
     );
   };
 
+  // Quick Ask AI deep-dive prompt
+  const handleAskAnalyst = (promptText: string) => {
+    navigate('/analyst', {
+      state: {
+        prefilledQuery: promptText,
+        reportId: selectedReportId,
+      },
+    });
+  };
+
   // Helper for empty chart card when structured data is missing
-  const renderEmptyChartCard = (title: string, icon: React.ElementType) => {
+  const renderEmptyChartCard = (title: string, icon: React.ElementType, description: string) => {
     const IconComponent = icon;
     return (
-      <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4 flex flex-col justify-between min-h-[300px]">
+      <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs space-y-4 flex flex-col justify-between min-h-[300px]">
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
           <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <IconComponent className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>{title}</span>
           </h3>
-          <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Grounding Enforced</span>
+          <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">Statement Grounded</span>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-slate-50/50 dark:bg-slate-950/50 rounded-xl border border-dashed border-slate-200 dark:border-slate-800/80">
-          <AlertCircle className="w-8 h-8 text-amber-500/80 mb-2" />
-          <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 max-w-xs">
-            Insufficient structured data available in this report.
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-slate-50/60 dark:bg-slate-950/60 rounded-xl border border-dashed border-slate-200 dark:border-slate-800/80">
+          <AlertCircle className="w-7 h-7 text-amber-500/90 mb-2" />
+          <p className="text-xs font-bold text-slate-800 dark:text-slate-200 max-w-xs">
+            {description}
           </p>
           <p className="text-[11px] text-slate-400 mt-1 max-w-xs">
-            No verified numerical statement figures could be extracted for this visualization from the document context.
+            No isolated multi-period tabular breakdown was found in this specific document. FinSight AI strictly avoids fabricating numbers.
           </p>
+          <button
+            onClick={() => handleAskAnalyst(`Extract and explain all disclosures related to ${title} from this report.`)}
+            className="mt-3 px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <MessageSquareText className="w-3.5 h-3.5" />
+            <span>Ask AI Analyst to Extract</span>
+          </button>
         </div>
       </div>
     );
@@ -156,7 +177,7 @@ export const AnalyticsPage: React.FC = () => {
 
         <EmptyState
           title="No Financial Reports Available"
-          description="Upload a financial filing PDF to extract structured statement trends, cash flows, assets, liabilities, and ratios."
+          description="Upload a corporate financial filing PDF to extract structured statement trends, cash flows, balance sheets, and key ratios."
           actionLabel="Upload PDF Filing"
           onAction={() => navigate('/upload')}
           icon={BarChart3}
@@ -173,19 +194,42 @@ export const AnalyticsPage: React.FC = () => {
   const cashFlowData = chartData?.cash_flow_chart || [];
   const yoyData = chartData?.yoy_comparison_chart || [];
   const keyRatios = chartData?.key_ratios || [];
-
+  const insights = chartData?.executive_insights || [];
   const defaultUnit = chartData?.currency ? `${chartData.currency}` : 'Units';
 
+  // Compute high-level KPI cards from grounded data
+  const latestRev = revData[revData.length - 1];
+  const priorRev = revData.length > 1 ? revData[0] : null;
+  const revGrowth = priorRev && latestRev && priorRev.value > 0
+    ? (((latestRev.value - priorRev.value) / priorRev.value) * 100).toFixed(1)
+    : null;
+
+  const latestProfit = profitData[profitData.length - 1];
+  const priorProfit = profitData.length > 1 ? profitData[0] : null;
+  const profitGrowth = priorProfit && latestProfit && Math.abs(priorProfit.value) > 0
+    ? (((latestProfit.value - priorProfit.value) / Math.abs(priorProfit.value)) * 100).toFixed(1)
+    : null;
+
+  const latestAssetLiab = assetsLiabData[assetsLiabData.length - 1];
+  const assetCoverage = latestAssetLiab && latestAssetLiab.liabilities > 0
+    ? (latestAssetLiab.assets / latestAssetLiab.liabilities).toFixed(2)
+    : null;
+
   return (
-    <div className="space-y-6 animate-fade-in w-full min-w-0 pb-12">
-      {/* Header */}
+    <div className="space-y-6 animate-fade-in w-full min-w-0 pb-16">
+      {/* Header & Report Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-            Financial Visual Analytics
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+              Financial Visual Analytics
+            </h1>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              <ShieldCheck className="w-3.5 h-3.5" /> Factual Grounding
+            </span>
+          </div>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Strictly grounded statement metrics extracted directly from corporate filings
+            Deterministic quantitative statement extraction and multi-period analytics
           </p>
         </div>
 
@@ -196,17 +240,144 @@ export const AnalyticsPage: React.FC = () => {
             value={selectedReportId}
             onChange={(e) => setSelectedReportId(e.target.value)}
             disabled={loading}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500 truncate max-w-[260px] shadow-sm cursor-pointer disabled:opacity-60"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500 truncate max-w-[280px] shadow-sm cursor-pointer disabled:opacity-60"
           >
             {reports.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.companyName || r.company_name || r.filename} ({r.financialYear || r.fiscal_period || 'PDF'})
+                {r.companyName || r.company_name || r.filename} ({r.financialYear || r.fiscal_period || 'Filing'})
               </option>
             ))}
           </select>
           {loading && <Loader2 className="w-4 h-4 animate-spin text-emerald-500 flex-shrink-0" />}
         </div>
       </div>
+
+      {/* TOP FINANCIAL KPIS SUMMARY RIBBON */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* KPI 1: Topline Revenue */}
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-emerald-500" />
+              <span>Reported Revenue</span>
+            </span>
+            {latestRev?.page_number && getSourcePageBadge(latestRev.page_number)}
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-black text-slate-900 dark:text-white">
+              {latestRev ? `${Number(latestRev.value).toLocaleString()}` : 'Disclosed in Filing'}
+            </span>
+            <span className="text-xs font-semibold text-slate-400">{latestRev?.unit || defaultUnit}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11px]">
+            <span className="text-slate-400">Period: {latestRev?.period || selectedReport?.financialYear || 'Current'}</span>
+            {revGrowth && (
+              <span className={`font-bold flex items-center gap-0.5 ${Number(revGrowth) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {Number(revGrowth) >= 0 ? '▲' : '▼'} {Math.abs(Number(revGrowth))}% YoY
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* KPI 2: Bottomline Net Profit */}
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <TrendingUp className="w-4 h-4 text-cyan-500" />
+              <span>Net Profit (PAT)</span>
+            </span>
+            {latestProfit?.page_number && getSourcePageBadge(latestProfit.page_number)}
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-black text-slate-900 dark:text-white">
+              {latestProfit ? `${Number(latestProfit.value).toLocaleString()}` : 'Disclosed in Filing'}
+            </span>
+            <span className="text-xs font-semibold text-slate-400">{latestProfit?.unit || defaultUnit}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11px]">
+            <span className="text-slate-400">Period: {latestProfit?.period || selectedReport?.financialYear || 'Current'}</span>
+            {profitGrowth && (
+              <span className={`font-bold flex items-center gap-0.5 ${Number(profitGrowth) >= 0 ? 'text-cyan-500' : 'text-rose-500'}`}>
+                {Number(profitGrowth) >= 0 ? '▲' : '▼'} {Math.abs(Number(profitGrowth))}% YoY
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* KPI 3: Asset to Liability Coverage */}
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <Scale className="w-4 h-4 text-indigo-500" />
+              <span>Asset / Liability Ratio</span>
+            </span>
+            {latestAssetLiab?.page_number && getSourcePageBadge(latestAssetLiab.page_number)}
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-black text-slate-900 dark:text-white">
+              {assetCoverage ? `${assetCoverage}x` : 'Solvent'}
+            </span>
+            <span className="text-xs font-semibold text-slate-400">Coverage</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11px]">
+            <span className="text-slate-400">
+              {latestAssetLiab ? `${latestAssetLiab.assets.toLocaleString()} vs ${latestAssetLiab.liabilities.toLocaleString()}` : 'Balance Sheet'}
+            </span>
+            <span className="font-bold text-indigo-500">Asset Solvency</span>
+          </div>
+        </div>
+
+        {/* KPI 4: Primary Statement Ratio */}
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs relative overflow-hidden">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <Activity className="w-4 h-4 text-purple-500" />
+              <span>{keyRatios[0]?.name || 'Operating Efficiency'}</span>
+            </span>
+            {keyRatios[0]?.page_number && getSourcePageBadge(keyRatios[0].page_number)}
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-2xl font-black text-slate-900 dark:text-white">
+              {keyRatios[0]?.value || 'Disclosed in Notes'}
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 truncate max-w-[170px]">{keyRatios[0]?.description || 'Financial Ratio'}</span>
+            <span className="font-bold text-purple-500">Grounded</span>
+          </div>
+        </div>
+      </div>
+
+      {/* EXECUTIVE FINANCIAL INSIGHTS & TAKEAWAYS HUB */}
+      {insights.length > 0 && (
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-500/5 via-cyan-500/5 to-slate-900/5 dark:from-emerald-950/40 dark:via-cyan-950/30 dark:to-slate-900 border border-emerald-500/20 shadow-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-emerald-500/20 pb-3">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white tracking-tight">
+                Executive CFO Insights & Performance Takeaways
+              </h3>
+            </div>
+            <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+              {selectedReport?.companyName || selectedReport?.company_name || 'Corporate Entity'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            {insights.map((insight, idx) => (
+              <div
+                key={idx}
+                className="p-3.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 flex items-start gap-2.5 text-xs text-slate-700 dark:text-slate-300 leading-relaxed shadow-xs"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                <div>{insight}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Institutional Export Suite Action Bar */}
       <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3">
@@ -265,18 +436,28 @@ export const AnalyticsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Global Insufficient Data Warning Banner */}
-      {!loading && chartData && !chartData.has_data && (
-        <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-xl flex items-start gap-3 text-amber-800 dark:text-amber-300">
-          <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider">Limited Structured Statements Found</h4>
-            <p className="text-xs mt-0.5">
-              Insufficient structured data available in this report to construct all 6 time-series visualizations. FinSight AI strictly avoids hallucinating numbers.
-            </p>
-          </div>
-        </div>
-      )}
+      {/* 1-Tap AI Analyst Deep-Dive Bar */}
+      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-bold text-slate-600 dark:text-slate-400 flex items-center gap-1.5 mr-1">
+          <MessageSquareText className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Quick Analyst Queries:</span>
+        </span>
+        {[
+          'Explain key revenue growth drivers and segment performance',
+          'Analyze operating cost breakdown and EBITDA margin expansion',
+          'Evaluate balance sheet debt levels and liquidity position',
+          'Summarize top strategic business risks and auditor comments',
+        ].map((queryText, idx) => (
+          <button
+            key={idx}
+            onClick={() => handleAskAnalyst(queryText)}
+            className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 text-xs font-medium transition-colors shadow-2xs flex items-center gap-1 cursor-pointer"
+          >
+            <span>{queryText}</span>
+            <ArrowUpRight className="w-3 h-3 opacity-60" />
+          </button>
+        ))}
+      </div>
 
       {/* Error state banner */}
       {error && (
@@ -284,14 +465,14 @@ export const AnalyticsPage: React.FC = () => {
           <span>{error}</span>
           <button
             onClick={() => setSelectedReportId(selectedReportId)}
-            className="flex items-center gap-1 font-bold underline hover:text-rose-900"
+            className="flex items-center gap-1 font-bold underline hover:text-rose-900 cursor-pointer"
           >
             <RefreshCw className="w-3 h-3" /> Retry
           </button>
         </div>
       )}
 
-      {/* CHARTS GRID (6 VISUALIZATIONS) */}
+      {/* CHARTS GRID (6 PRIMARY + DIAGNOSTIC VISUALIZATIONS) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
         {/* 1. REVENUE TREND CHART */}
@@ -301,7 +482,7 @@ export const AnalyticsPage: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <BarChart3 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>1. Revenue Trend</span>
+                  <span>1. Topline Revenue Trajectory</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
                   Metric: {revData[0]?.metric_name || 'Total Revenue'} | Unit: {revData[0]?.unit || defaultUnit}
@@ -324,7 +505,7 @@ export const AnalyticsPage: React.FC = () => {
                       color: chartTheme.tooltipText,
                     }}
                     formatter={(value: any, name: any, item: any) => [
-                      `${value} ${item.payload.unit || defaultUnit}`,
+                      `${Number(value).toLocaleString()} ${item.payload.unit || defaultUnit}`,
                       item.payload.metric_name || 'Revenue',
                     ]}
                     labelFormatter={(label, items) => `Period: ${label} (Page ${items[0]?.payload?.page_number || 'N/A'})`}
@@ -335,7 +516,7 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('1. Revenue Trend', BarChart3)
+          renderEmptyChartCard('1. Revenue Trend', BarChart3, 'No multi-period revenue table isolated in this section.')
         )}
 
         {/* 2. PROFIT TREND CHART */}
@@ -345,10 +526,10 @@ export const AnalyticsPage: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
-                  <span>2. Profit Trend</span>
+                  <span>2. Net Profit & Earnings Trend</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Metric: {profitData[0]?.metric_name || 'Net Profit'} | Unit: {profitData[0]?.unit || defaultUnit}
+                  Metric: {profitData[0]?.metric_name || 'Net Profit (PAT)'} | Unit: {profitData[0]?.unit || defaultUnit}
                 </p>
               </div>
               {getSourcePageBadge(profitData[0]?.page_number)}
@@ -368,7 +549,7 @@ export const AnalyticsPage: React.FC = () => {
                       color: chartTheme.tooltipText,
                     }}
                     formatter={(value: any, name: any, item: any) => [
-                      `${value} ${item.payload.unit || defaultUnit}`,
+                      `${Number(value).toLocaleString()} ${item.payload.unit || defaultUnit}`,
                       item.payload.metric_name || 'Net Profit',
                     ]}
                     labelFormatter={(label, items) => `Period: ${label} (Page ${items[0]?.payload?.page_number || 'N/A'})`}
@@ -378,7 +559,7 @@ export const AnalyticsPage: React.FC = () => {
                     dataKey="value"
                     stroke="#06b6d4"
                     strokeWidth={3}
-                    dot={{ r: 5, fill: '#06b6d4' }}
+                    dot={{ r: 6, fill: '#06b6d4' }}
                     name="Net Profit"
                   />
                 </LineChart>
@@ -386,7 +567,7 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('2. Profit Trend', TrendingUp)
+          renderEmptyChartCard('2. Profit Trend', TrendingUp, 'No isolated profit time-series statement table.')
         )}
 
         {/* 3. EXPENSE TREND CHART */}
@@ -396,7 +577,7 @@ export const AnalyticsPage: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <DollarSign className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                  <span>3. Expense Trend</span>
+                  <span>3. Operating Expenses & Cost Profile</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
                   Metric: {expenseData[0]?.metric_name || 'Operating Expenses'} | Unit: {expenseData[0]?.unit || defaultUnit}
@@ -419,7 +600,7 @@ export const AnalyticsPage: React.FC = () => {
                       color: chartTheme.tooltipText,
                     }}
                     formatter={(value: any, name: any, item: any) => [
-                      `${value} ${item.payload.unit || defaultUnit}`,
+                      `${Number(value).toLocaleString()} ${item.payload.unit || defaultUnit}`,
                       item.payload.metric_name || 'Expenses',
                     ]}
                     labelFormatter={(label, items) => `Period: ${label} (Page ${items[0]?.payload?.page_number || 'N/A'})`}
@@ -430,7 +611,7 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('3. Expense Trend', DollarSign)
+          renderEmptyChartCard('3. Expense Trend', DollarSign, 'No standalone operational expense breakdown table.')
         )}
 
         {/* 4. ASSETS VS LIABILITIES CHART */}
@@ -440,10 +621,10 @@ export const AnalyticsPage: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <Scale className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>4. Assets vs Liabilities</span>
+                  <span>4. Balance Sheet: Assets vs Liabilities</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Balance Sheet Comparison | Unit: {assetsLiabData[0]?.unit || defaultUnit}
+                  Solvency & Capital Structure | Unit: {assetsLiabData[0]?.unit || defaultUnit}
                 </p>
               </div>
               {getSourcePageBadge(assetsLiabData[0]?.page_number)}
@@ -472,7 +653,7 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('4. Assets vs Liabilities', Scale)
+          renderEmptyChartCard('4. Assets vs Liabilities', Scale, 'No isolated balance sheet asset/liability schedule.')
         )}
 
         {/* 5. CASH FLOW CHART */}
@@ -515,7 +696,7 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('5. Cash Flow', Wallet)
+          renderEmptyChartCard('5. Cash Flow', Wallet, 'No dedicated Cash Flow statement schedule extracted in this filing.')
         )}
 
         {/* 6. YEAR-OVER-YEAR COMPARISON CHART */}
@@ -525,10 +706,10 @@ export const AnalyticsPage: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <PieChart className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-                  <span>6. Year-over-Year Comparison</span>
+                  <span>6. Year-over-Year (YoY) Multi-Metric Variance</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Multi-Period YoY Growth Rates | Unit: {yoyData[0]?.unit || defaultUnit}
+                  Comparative Growth & Variance | Unit: {yoyData[0]?.unit || defaultUnit}
                 </p>
               </div>
               {getSourcePageBadge(yoyData[0]?.page_number)}
@@ -548,7 +729,7 @@ export const AnalyticsPage: React.FC = () => {
                       color: chartTheme.tooltipText,
                     }}
                     formatter={(value: any, name: any, item: any) => [
-                      `${value} ${item.payload.unit || defaultUnit}`,
+                      `${Number(value).toLocaleString()} ${item.payload.unit || defaultUnit}`,
                       name === 'previous_year_value'
                         ? `Prior (${item.payload.previous_year_period || 'Prior'})`
                         : `Current (${item.payload.current_year_period || 'Current'})`,
@@ -556,145 +737,52 @@ export const AnalyticsPage: React.FC = () => {
                     labelFormatter={(label, items) => `${label} (Page ${items[0]?.payload?.page_number || 'N/A'})`}
                   />
                   <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
-                  <Bar dataKey="previous_year_value" fill="#94a3b8" radius={[4, 4, 0, 0]} name="Previous Period" />
+                  <Bar dataKey="previous_year_value" fill="#94a3b8" radius={[4, 4, 0, 0]} name="Prior Period" />
                   <Bar dataKey="current_year_value" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Current Period" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
         ) : (
-          renderEmptyChartCard('6. Year-over-Year Comparison', PieIcon)
+          renderEmptyChartCard('6. Year-over-Year Comparison', PieIcon, 'No multi-period comparative variance table in filing.')
         )}
-
-        {/* 7. VISUAL WATERFALL CHART (REVENUE TO NET PROFIT CASCADE) */}
-        <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>7. Revenue to Net Profit Waterfall</span>
-              </h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                P&L Cost Breakdown & Margin Cascade
-              </p>
-            </div>
-            {getSourcePageBadge(revData[0]?.page_number)}
-          </div>
-
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={[
-                  { step: 'Gross Revenue', value: revData[revData.length - 1]?.value || 100000, fill: '#10b981' },
-                  { step: 'Direct Delivery', value: (expenseData[expenseData.length - 1]?.value || 70000) * 0.65, fill: '#ef4444' },
-                  { step: 'Operating SG&A', value: (expenseData[expenseData.length - 1]?.value || 70000) * 0.35, fill: '#f59e0b' },
-                  { step: 'Operating Profit', value: Math.max(0, (revData[revData.length - 1]?.value || 100000) - (expenseData[expenseData.length - 1]?.value || 70000)), fill: '#3b82f6' },
-                  { step: 'Net Profit (PAT)', value: profitData[profitData.length - 1]?.value || 25000, fill: '#8b5cf6' },
-                ]}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.4} />
-                <XAxis dataKey="step" stroke={chartTheme.axis} fontSize={10} />
-                <YAxis stroke={chartTheme.axis} fontSize={11} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: chartTheme.tooltipBg,
-                    borderColor: chartTheme.tooltipBorder,
-                    borderRadius: '12px',
-                    color: chartTheme.tooltipText,
-                  }}
-                  formatter={(val: any) => [`${Number(val).toLocaleString()} ${defaultUnit}`, 'Value']}
-                />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                  {['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6'].map((col, idx) => (
-                    <Cell key={`cell_wf_${idx}`} fill={col} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* 8. BUSINESS & VERTICAL SEGMENT BREAKDOWN */}
-        <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <PieIcon className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                <span>8. Business Segment Breakdown</span>
-              </h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Revenue Contribution by Industry Vertical (%)
-              </p>
-            </div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 font-bold">
-              Segment Distribution
-            </span>
-          </div>
-
-          <div className="h-64 flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={[
-                    { name: 'Financial Services', value: 31, fill: '#10b981' },
-                    { name: 'Retail & CPG', value: 16, fill: '#3b82f6' },
-                    { name: 'Manufacturing', value: 14, fill: '#f59e0b' },
-                    { name: 'Tech & Telecom', value: 13, fill: '#8b5cf6' },
-                    { name: 'Energy & Utilities', value: 12, fill: '#06b6d4' },
-                    { name: 'Life Sciences', value: 14, fill: '#ec4899' },
-                  ]}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={75}
-                  paddingAngle={3}
-                >
-                  {['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899'].map((color, index) => (
-                    <Cell key={`cell_donut_${index}`} fill={color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: chartTheme.tooltipBg,
-                    borderColor: chartTheme.tooltipBorder,
-                    borderRadius: '12px',
-                    color: chartTheme.tooltipText,
-                  }}
-                  formatter={(val: any) => [`${val}%`, 'Contribution']}
-                />
-                <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
 
       </div>
 
       {/* EXTRACTED KEY RATIOS SECTION */}
       <div className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4 mt-6">
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <ArrowUpRight className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span>Verified Statement Ratios for {selectedReport?.companyName || selectedReport?.company_name || selectedReport?.filename}</span>
-          </h3>
-          <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Grounded Evidence</span>
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <ArrowUpRight className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                Verified Statement Ratios & Performance Metrics
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Extracted directly from {selectedReport?.companyName || selectedReport?.company_name || selectedReport?.filename}
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-500/20 px-2.5 py-1 rounded-full uppercase tracking-wider font-extrabold">
+            Grounded Evidence
+          </span>
         </div>
 
         {keyRatios.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {keyRatios.map((ratio, idx) => (
-              <div key={idx} className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 space-y-1">
+              <div key={idx} className="p-4 rounded-xl bg-slate-50/80 dark:bg-slate-950/80 border border-slate-200/80 dark:border-slate-800 space-y-1.5 shadow-2xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">{ratio.name}</span>
                   {ratio.page_number && (
-                    <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-1.5 py-0.5 rounded">
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
                       Page {ratio.page_number}
                     </span>
                   )}
                 </div>
-                <span className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 block">{ratio.value}</span>
+                <span className="text-2xl font-black text-slate-900 dark:text-slate-100 block tracking-tight">{ratio.value}</span>
                 {ratio.description && (
                   <span className="text-[11px] text-slate-400 line-clamp-2 block">{ratio.description}</span>
                 )}
@@ -702,9 +790,9 @@ export const AnalyticsPage: React.FC = () => {
             ))}
           </div>
         ) : (
-          <p className="text-xs text-slate-400 italic py-2">
-            Insufficient structured data available in this report to extract key financial ratios.
-          </p>
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 text-center text-xs text-slate-400 italic">
+            Financial ratios can also be dynamically analyzed and derived by querying the AI Analyst in the chat tab.
+          </div>
         )}
       </div>
     </div>

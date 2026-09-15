@@ -37,10 +37,23 @@ class PDFExtractorAdapter(BaseDocumentExtractor):
     ) -> ExtractedDocument:
         import os
         if isinstance(file_bytes, str):
+            # For path-based inputs, read a representative 128 KB sample for the hash
+            # rather than loading the entire (potentially large) PDF into RAM.
             doc_hash = ""
             if os.path.exists(file_bytes):
+                hasher = hashlib.sha256()
+                file_size_bytes = os.path.getsize(file_bytes)
+                # Include file size in hash so that two files with identical first 128 KB
+                # but different lengths get different hashes.
+                hasher.update(str(file_size_bytes).encode())
                 with open(file_bytes, "rb") as f:
-                    doc_hash = hashlib.sha256(f.read(65536)).hexdigest()
+                    # First 64 KB
+                    hasher.update(f.read(65536))
+                    # Last 64 KB (if file is large enough)
+                    if file_size_bytes > 131072:
+                        f.seek(-65536, 2)
+                        hasher.update(f.read(65536))
+                doc_hash = hasher.hexdigest()
         else:
             doc_hash = hashlib.sha256(file_bytes).hexdigest()
 

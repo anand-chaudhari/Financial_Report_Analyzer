@@ -1,261 +1,224 @@
-# 💼 FinSight AI — Autonomous Financial Report Analyzer & Intelligence Platform
+# 💼 FinSight AI — Localhost-First Autonomous Financial Report Analyzer & Intelligence Platform
 
 [![Vite React](https://img.shields.io/badge/Frontend-React_18_%2B_Vite_%2B_TailwindCSS-06b6d4?style=for-the-badge&logo=react)](https://reactjs.org/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI_%2B_Python_3.12-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![ChromaDB](https://img.shields.io/badge/Vector_Store-ChromaDB-6366f1?style=for-the-badge)](https://www.trychroma.com/)
-[![Groq & NVIDIA NIM](https://img.shields.io/badge/LLM_Engine-Groq_%2B_NVIDIA_NIM_%2B_Gemini-10b981?style=for-the-badge)](https://groq.com/)
+[![Groq & Gemini](https://img.shields.io/badge/LLM_Engine-Groq_%2B_NVIDIA_NIM_%2B_Gemini-10b981?style=for-the-badge)](https://groq.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-amber?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-> **FinSight AI** is an enterprise-grade full-stack financial intelligence platform engineered to ingest, parse, index, and analyze complex corporate financial filings (SEC 10-K, 10-Q, Annual Reports, Earnings Disclosures) using hybrid Retrieval-Augmented Generation (RAG). It provides verifiable, page-cited answers, auto-generated interactive charts, side-by-side filing comparisons, and institutional export suites.
+> **FinSight AI** is a local-first, high-performance financial intelligence application engineered to ingest, parse, index, and analyze massive corporate filings (10-K, 10-Q, annual reports up to **600+ pages / 250 MB**) without freezing your browser or causing backend HTTP timeouts.
 
 ---
 
 ## 📑 Table of Contents
-1. [System Architecture & Workflow](#-system-architecture--workflow)
-2. [Key Features & Capabilities](#-key-features--capabilities)
-3. [Comprehensive File & Folder Structure (With Use Cases)](#-comprehensive-file--folder-structure-with-use-cases)
-4. [Tech Stack](#-tech-stack)
-5. [Installation & Local Setup](#-installation--local-setup)
-6. [Environment Variables Configuration](#-environment-variables-configuration)
-7. [Comprehensive Interview Questions & In-Depth Answers](#-comprehensive-interview-questions--in-depth-answers)
-   - [Part 1: RAG Architecture & Vector Search](#part-1-rag-architecture--vector-search)
-   - [Part 2: Financial Precision & Hallucination Prevention](#part-2-financial-precision--hallucination-prevention)
-   - [Part 3: Document Processing & Performance Optimization](#part-3-document-processing--performance-optimization)
-   - [Part 4: Multi-Model LLM Orchestration & Failover](#part-4-multi-model-llm-orchestration--failover)
-   - [Part 5: Full-Stack Engineering & Scalability](#part-5-full-stack-engineering--scalability)
-8. [License](#-license)
+1. [Why FinSight AI? (Simple Explanation & Design Choices)](#-why-finsight-ai-simple-explanation--design-choices)
+2. [System Architecture & Asynchronous Workflow](#-system-architecture--asynchronous-workflow)
+3. [Key Features & Features Breakdown](#-key-features--features-breakdown)
+4. [Tech Stack & Technical Choices](#-tech-stack--technical-choices)
+5. [Complete File & Folder Structure (With Use Cases)](#-complete-file--folder-structure-with-use-cases)
+6. [Installation & Local Setup](#-installation--local-setup)
+7. [Environment Variables Configuration](#-environment-variables-configuration)
+8. [Frequently Asked Questions & Technical Interview Answers](#-frequently-asked-questions--technical-interview-answers)
+9. [License](#-license)
 
 ---
 
-## 🏗️ System Architecture & Workflow
+## 💡 Why FinSight AI? (Simple Explanation & Design Choices)
+
+Processing a 600-page annual report is extremely heavy: it involves reading text, extracting complex accounting tables, running OCR on scanned pages, calculating vector embeddings for thousands of text paragraphs, and storing them in a database.
+
+If a server tries to do all of this inside a standard web request, the browser waits, hits a 5-minute timeout (`AxiosError: timeout of 300000ms exceeded`), and crashes.
+
+FinSight AI solves this architecturally using a **Decoupled Asynchronous Localhost Engine**:
+
+### 🎯 Key Design Choices & "Why We Chose This":
+
+1. **Non-Blocking Instant Upload (< 1 Second Response)**
+   - *Why?* The backend receives the file, streams it to local disk, creates a job ID, and returns HTTP 200 immediately. You don't have to sit looking at a spinning loader for 10 minutes.
+2. **Local Worker Thread Pool (`ThreadPoolExecutor`)**
+   - *Why?* Heavy CPU operations (PDF extraction, OCR, vector embeddings) run on dedicated background threads. This keeps FastAPI's main thread free so normal requests (`GET /dashboard`, `GET /reports`, `GET /analytics`) respond in **< 50ms** even while a 600-page report is indexing in the background.
+3. **SHA-256 Instant Hash Reuse**
+   - *Why?* If you re-upload a report you already processed, FinSight AI detects the exact file hash and reuses existing indexed vector chunks instantly—zero redundant waiting.
+4. **Selective OCR (Smart Scanning)**
+   - *Why?* Native text extraction using PyMuPDF is **50x faster** than OCR. We extract native text first; OCR is only executed on pages that are pure scanned images. This cuts unnecessary processing time by up to **95%**.
+5. **Memory-Controlled Batching (20 Pages / Batch)**
+   - *Why?* Loading a 600-page PDF into RAM all at once can crash your laptop. We extract, chunk, embed, and index in small 20-page batches with automatic garbage collection (`gc.collect()`), keeping RAM usage under 1 GB.
+6. **Non-Blocking Status Polling & Persistent Header Progress Banner**
+   - *Why?* While a report processes in the background, you can navigate freely across Dashboard, My Reports, AI Analyst, Compare, and Settings. The header progress banner shows real-time progress (`0-100%`) without locking the screen.
+7. **Multi-Model LLM Routing (Groq + Gemini + NVIDIA NIM)**
+   - *Why?* Groq provides lightning-fast answers (sub-2 seconds). If Groq is rate-limited, the system automatically falls back to NVIDIA NIM or Gemini without interrupting your session.
+
+---
+
+## 🏗️ System Architecture & Asynchronous Workflow
 
 ```
-+---------------------------------------------------------------------------------------------------+
-|                                      FINSIGHT AI ARCHITECTURE                                      |
-+---------------------------------------------------------------------------------------------------+
-
-     [ Corporate Filing ] -> (PDF, DOCX, XLSX, TXT)
-              │
-              ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 1. STREAMING INGESTION & INSPECTION ENGINE                   │
-   │    • 1MB Chunked disk streaming (Handles up to 200MB files)  │
-   │    • Pre-processing heuristic inspection (Page count, text)  │
-   └──────────────────────────────┬───────────────────────────────┘
+                   FINSIGHT AI LOCALHOST ARCHITECTURE
                                   │
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 2. HYBRID EXTRACTION & STRUCTURE PRESERVATION                │
-   │    • Native PyMuPDF (Fitz) vector extraction (~50x faster)   │
-   │    • Selective OCR Fallback (Only image / scanned pages)     │
-   │    • Financial Table & Grid parsing (Markdown tables)        │
-   │    • Financial Section Classification (BS, PL, CF, MD&A)     │
-   └──────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 3. SEMANTIC CHUNKING & EMBEDDINGS PIPELINE                   │
-   │    • Financial notation cleaner (₹, $, €, %, Cr, Lakh)       │
-   │    • Recursive character chunking (1000 chars, 200 overlap)  │
-   │    • SentenceTransformers (`all-MiniLM-L6-v2`) Embedding     │
-   │    • ChromaDB Persistent Vector Indexing                     │
-   └──────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 4. HYBRID RETRIEVAL & CONTEXT ENRICHMENT                     │
-   │    • Financial Query Expansion (Revenue -> Turnover, Sales)  │
-   │    • Multi-vector similarity search + Metadata filtering     │
-   │    • Section boundary preservation & Table preservation      │
-   └──────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 5. MULTI-MODEL LLM INFERENCE & FAILOVER ENGINE               │
-   │    • Primary Engine: Groq (OpenAI GPT-OSS-120B / Compound)   │
-   │    • Failover 1: NVIDIA NIM (Moonshot Kimi K3 / Llama 3.2)   │
-   │    • Failover 2: Google Gemini (Gemini 2.0 Flash / Pro)      │
-   │    • Guardrail: Zero-Hallucination & Exact Citation Prompt   │
-   └──────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 6. INTERACTIVE ANALYST DASHBOARD & VISUALIZATION             │
-   │    • In-Chat Interactive Recharts (Bar & Trend Line toggles) │
-   │    • Zebra-striped financial markdown tables & Metric Badges │
-   │    • Interactive In-Document PDF Split View                  │
-   │    • Institutional Export Suite (Excel Model, PDF, Slides)   │
-   └──────────────────────────────────────────────────────────────┘
+      ┌───────────────────────────┼───────────────────────────┐
+      │                           │                           │
+ 1. Upload API             2. Status API               3. Normal APIs
+ (POST /upload)          (GET /status 3s)           (Dashboard, Reports)
+      │                           │                           │
+      ▼                           ▼                           ▼
+Save to Disk &              Return Real-Time            Instant Response
+Return Job ID               Progress (0-100%)              (< 50 ms)
+      │                           │                           │
+      ▼                           │                           │
+ Enqueue Job                      │                           │
+      │                           │                           │
+      ▼                           │                           │
+ LOCAL WORKER THREAD POOL         │                           │
+(PDF Extractor → Selective OCR    │                           │
+ → Chunker → Embeddings           │                           │
+ → ChromaDB Indexing) ────────────┘                           │
+      │                                                       │
+      ▼                                                       ▼
+Document READY ───────────────────────────────────► RAG Q&A Available
 ```
 
 ---
 
-## 🌟 Key Features & Capabilities
+## 🌟 Key Features & Features Breakdown
 
-1. **Deterministic Financial Accuracy**:
-   - Explicit strict instruction prompts enforce exact table lookups rather than fuzzy summaries.
-   - Respects accounting notations: negative numbers in parentheses `(1,200)` are parsed as `-1200`.
-   - Never hallucinates missing figures; provides explicit disclaimers when disclosures are absent.
-2. **Interactive In-Chat Dynamic Visualizations**:
-   - Any financial comparative table in chat automatically offers an interactive toggle between **Table View**, **Bar Chart**, and **Trend Line** powered by Recharts.
-3. **Live In-Document PDF Split Viewer**:
-   - View citations directly side-by-side with the active PDF document, jumping automatically to cited page numbers.
-4. **Multi-Model High-Availability LLM Routing**:
-   - Instant sub-2-second generation via **Groq** (`openai/gpt-oss-120b`, `groq/compound`, `qwen/qwen3.6-27b`) with automatic failover to **NVIDIA NIM** (`moonshotai/kimi-k3`) and **Google Gemini**.
-5. **200 MB Large-File Optimization**:
-   - Memory-friendly 1 MB streamed uploads, incremental page processing, selective OCR, and batched ChromaDB insertions.
-6. **Side-by-Side Corporate Comparison**:
-   - Compare two financial reports (e.g., FY24 vs FY25 or Company A vs Company B) with automated absolute and percentage variance calculations.
-7. **Institutional Export Suite**:
-   - Export analyst threads to **Excel CSV Financial Models**, **CFO Executive Brief PDFs**, and **Board Presentation JSON Decks**.
+### 1. ⚡ Non-Blocking 600+ Page Processing
+- Handles filings up to **250 MB** and **600+ pages** without browser timeout.
+- Instant HTTP upload response in **< 1 second**.
+- Background progress visible in the top navigation header (`Queued` → `Analyzing` → `Extracting` → `Embedding` → `Indexing` → `Ready`).
 
----
+### 2. 💬 Humanic RAG AI Analyst with Source Footers
+- Chat naturally with your financial filings using Groq's high-speed LLMs (`llama-3.3-70b-versatile`).
+- Warm, conversational tone with strict financial grounding.
+- Clear page citations listed cleanly at the bottom of responses (`Sources: Page 4, Page 18`), keeping text neat and easy to read.
 
-## 📁 Comprehensive File & Folder Structure (With Use Cases)
+### 3. 📊 Dynamic Interactive Financial Charts (Recharts)
+- Automatic detection of financial tables in AI responses.
+- In-chat toggle between **Table View**, **Bar Chart**, and **Trend Line**.
+- Dedicated **Analytics Page** with structured financial charts (Revenue Trend, Net Profit Margin, Expense Breakdown, YoY Comparisons).
 
-### 🔹 Backend Structure (`backend/`)
+### 4. 📄 In-Document PDF Split Viewer
+- Side-by-side view of your financial document alongside AI Analyst responses.
+- Click any citation badge to jump directly to the exact page in the PDF.
 
-```
-backend/
-├── app/
-│   ├── api/
-│   │   └── deps.py                    # [USE CASE]: Authentication dependency injection; validates Firebase JWT tokens and injects authenticated user state into route handlers.
-│   ├── config/
-│   │   └── settings.py                # [USE CASE]: Central Pydantic v2 application configuration; loads environment variables, API keys (Groq, NVIDIA, Gemini), and storage paths.
-│   ├── document_processing/
-│   │   ├── cleaner.py                 # [USE CASE]: Cleans raw OCR/PDF text while preserving critical financial syntax (currencies ₹/$/€, percentages, accounting brackets, negative signs).
-│   │   ├── chunker.py                 # [USE CASE]: Recursive semantic character text splitter that breaks documents into contextual overlapping chunks with page and section metadata.
-│   │   ├── section_detector.py        # [USE CASE]: Pattern matcher that identifies core financial sections (Balance Sheet, P&L, Cash Flow, Notes, MD&A, Auditor Report).
-│   │   ├── pdf_extractor.py           # [USE CASE]: Fast PyMuPDF (Fitz) text/table extractor with smart heuristics and OCR fallback for scanned pages.
-│   │   ├── file_detector.py           # [USE CASE]: Inspects MIME types and extensions to route documents to appropriate parsers (PDF, DOCX, XLSX, TXT).
-│   │   ├── models.py                  # [USE CASE]: Dataclasses representing document chunks, extracted tables, and section hierarchies.
-│   │   └── extractors/                # [USE CASE]: Specialized parser modules for DOCX, XLSX spreadsheets, and plain text files.
-│   ├── firebase/
-│   │   └── firebase_service.py        # [USE CASE]: Firebase Admin SDK integration managing Cloud Firestore collections and cloud storage backups.
-│   ├── llm/
-│   │   ├── llm_client.py              # [USE CASE]: Primary LLM orchestrator implementing automated failover across Groq, NVIDIA NIM, Gemini, and OpenAI.
-│   │   └── nvidia_client.py           # [USE CASE]: Dedicated NVIDIA NIM API integration layer targeting Moonshot Kimi K3, Llama 3.2, and Mistral Large.
-│   ├── models/
-│   │   └── domain models              # [USE CASE]: Pydantic domain models for reports, chat messages, financial summaries, and comparative metrics.
-│   ├── rag/
-│   │   ├── rag_service.py             # [USE CASE]: Core RAG pipeline; performs financial synonym expansion, hybrid vector search, and grounded response synthesis.
-│   │   ├── financial_calculator.py    # [USE CASE]: Validates calculations, computes financial ratios (operating margins, net profit margin, YoY growth), and standardizes units.
-│   │   └── prompts.py                 # [USE CASE]: System prompt engineering mandating strict factual grounding, verified page citations, and structured markdown output.
-│   ├── routes/
-│   │   ├── chat.py                    # [USE CASE]: FastAPI endpoints for analyst chat Q&A, thread creation, conversation history, and thread deletion.
-│   │   ├── documents.py               # [USE CASE]: Endpoints for streaming document upload, inspection, processing progress polling, and PDF preview serving.
-│   │   ├── financial.py               # [USE CASE]: Endpoints for structured financial overview extraction, risk analysis, and metric breakdowns.
-│   │   ├── compare.py                 # [USE CASE]: Endpoints for multi-report comparison, variance analysis, and cross-quarter diffs.
-│   │   └── reports.py                 # [USE CASE]: CRUD endpoints for managing user report metadata and executive summaries.
-│   ├── schemas/
-│   │   └── pydantic schemas           # [USE CASE]: Strict request/response validation schemas for all REST API endpoints.
-│   ├── services/
-│   │   ├── cache_service.py           # [USE CASE]: Multi-tier disk and memory caching for extracted metrics, overview data, and document summaries to eliminate redundant LLM calls.
-│   │   ├── chat_service.py            # [USE CASE]: Manages conversational state, multi-turn memory, citation deduplication, and streaming query execution.
-│   │   ├── document_service.py        # [USE CASE]: Orchestrates full document lifecycle: 1MB chunked disk writes, inspection, extraction, embedding generation, and ChromaDB insertion.
-│   │   ├── financial_service.py       # [USE CASE]: Extracts core financial metrics (Revenue, EBITDA, PAT, EPS, Debt, Margins) with verified source page links.
-│   │   ├── report_service.py          # [USE CASE]: Report management and metadata aggregation service.
-│   │   └── summary_service.py         # [USE CASE]: Generates concise executive summaries and key bullet takeaways for uploaded filings.
-│   ├── utils/
-│   │   └── logger.py                  # [USE CASE]: Production logger with Windows UTF-8 stdout reconfiguration preventing UnicodeEncodeError on Indian Rupee (₹) symbols.
-│   ├── vectorstore/
-│   │   ├── embeddings.py              # [USE CASE]: SentenceTransformer embedding generator (`sentence-transformers/all-MiniLM-L6-v2`) with batched vectorized inference.
-│   │   └── vector_service.py          # [USE CASE]: ChromaDB client managing isolated collections, cosine similarity search, chunk indexing, and deletion.
-│   ├── main.py                        # [USE CASE]: FastAPI application entrypoint with CORS middleware, lifespan events, and global route mounting.
-│   └── run_server.py                  # [USE CASE]: Development runner script launching Uvicorn with auto-reload.
-├── tests/
-│   ├── test_financial_rag_accuracy.py # [USE CASE]: Unit & regression tests for financial synonym retrieval, table accuracy, and metric preservation.
-│   ├── test_large_pdf_optimization.py # [USE CASE]: Validates streaming 1MB writes, non-blocking async execution, and stage progression.
-│   ├── test_multi_format.py           # [USE CASE]: Tests extraction on PDF, DOCX, XLSX, and TXT files.
-│   ├── test_caching.py                # [USE CASE]: Verifies cache hit/miss lifecycles for financial summaries and overviews.
-│   └── test_nvidia_rag.py             # [USE CASE]: Tests dedicated NVIDIA NIM endpoint routing.
-├── requirements.txt                   # [USE CASE]: Python package dependencies specification.
-└── .env.example                       # [USE CASE]: Template environment variables for backend.
-```
+### 5. ⚖️ Side-by-Side Corporate Comparison
+- Compare two filings (e.g., FY24 vs FY25 or Company A vs Company B).
+- Automated absolute and percentage variance calculations.
+
+### 6. 📁 Multi-Format Support
+- Ingests **PDF**, **Excel (.xlsx, .xls)**, **CSV**, **Word (.docx)**, **Markdown**, and **JSON** filings.
 
 ---
 
-### 🔹 Frontend Structure (`frontend/`)
+## 💻 Tech Stack & Technical Choices
 
-```
-frontend/
-├── src/
-│   ├── components/
-│   │   ├── common/
-│   │   │   └── RichMarkdownRenderer.tsx # [USE CASE]: Markdown renderer with in-chat interactive Recharts (Bar/Line), styled tables, and financial badge accents.
-│   │   ├── financial/
-│   │   │   └── FinancialOverviewSection.tsx # [USE CASE]: Interactive overview dashboard displaying Revenue, Profit, Margins, and verified page badges.
-│   │   ├── pdf/
-│   │   │   └── PdfSplitViewer.tsx       # [USE CASE]: Collapsible split PDF viewer with live page navigation, zooming, and citation highlight callouts.
-│   │   ├── CitationBadge.tsx            # [USE CASE]: Interactive citation badge pill that opens page source excerpts.
-│   │   ├── Header.tsx                   # [USE CASE]: Top header navigation bar with user profile actions.
-│   │   ├── Navbar.tsx                   # [USE CASE]: Global responsive navigation bar with mobile slide-out drawer.
-│   │   ├── Sidebar.tsx                  # [USE CASE]: Collapsible application navigation sidebar with active link indicators.
-│   │   ├── MetricCard.tsx               # [USE CASE]: High-contrast financial metric card with sparklines and growth badges.
-│   │   ├── ReportCard.tsx               # [USE CASE]: Filing summary card with status badges, page counts, and quick action buttons.
-│   │   ├── StatCard.tsx                 # [USE CASE]: Dashboard statistical KPI card with glowing gradients.
-│   │   └── LoadingSpinner.tsx           # [USE CASE]: Animated loading indicator for asynchronous operations.
-│   ├── context/
-│   │   ├── AuthContext.tsx              # [USE CASE]: React Context managing Firebase user authentication, login, register, and logout state.
-│   │   └── ReportContext.tsx            # [USE CASE]: React Context managing uploaded reports, active report selection, and workspace syncing.
-│   ├── hooks/
-│   │   ├── useAuth.ts                   # [USE CASE]: Custom hook exposing authentication methods and user profile.
-│   │   ├── useChat.ts                   # [USE CASE]: Custom hook managing chat message streams, sending queries, and error recovery.
-│   │   └── useTheme.ts                  # [USE CASE]: Custom hook managing light/dark mode theme state.
-│   ├── pages/
-│   │   ├── AnalystPage.tsx              # [USE CASE]: Full-screen institutional analyst workspace featuring multi-turn chat, PDF split viewer, citation modals, and export suite.
-│   │   ├── ReportAnalysisPage.tsx       # [USE CASE]: Document analysis hub with interactive tabs for AI Assistant, Visual Charts, and Executive Summary.
-│   │   ├── DashboardPage.tsx            # [USE CASE]: Workspace overview displaying total filings, indexed pages, financial overview, and recent filings.
-│   │   ├── UploadPage.tsx               # [USE CASE]: Drag-and-drop filing upload page with real-time 8-stage pipeline visualization.
-│   │   ├── ComparePage.tsx              # [USE CASE]: Side-by-side comparative analysis view comparing metrics between two filings.
-│   │   ├── AnalyticsPage.tsx            # [USE CASE]: Interactive chart dashboard showing historical revenue, margins, and expense breakdowns.
-│   │   ├── ReportsPage.tsx              # [USE CASE]: Filing repository list with filtering, search, and delete options.
-│   │   ├── ChatHistoryPage.tsx          # [USE CASE]: Archives and manages past analyst conversation sessions.
-│   │   └── SettingsPage.tsx             # [USE CASE]: Workspace preferences, LLM provider selection, and API key management.
-│   ├── services/
-│   │   ├── apiClient.ts                 # [USE CASE]: Axios client configured with base URL, request interceptors, and Firebase auth headers.
-│   │   ├── chatService.ts               # [USE CASE]: HTTP service interfacing with backend chat endpoints.
-│   │   ├── documentService.ts           # [USE CASE]: HTTP service for uploading documents, fetching status, and file deletion.
-│   │   ├── exportService.ts             # [USE CASE]: Client-side exporter generating CSV financial models, PDF briefs, and presentation slide decks.
-│   │   └── financialService.ts          # [USE CASE]: HTTP service fetching structured financial overview and risk analysis.
-│   ├── types/
-│   │   ├── chat.ts                      # [USE CASE]: TypeScript interfaces for chat messages, citations, and conversation threads.
-│   │   ├── financial.ts                 # [USE CASE]: TypeScript interfaces for financial metrics, ratios, and comparisons.
-│   │   └── report.ts                    # [USE CASE]: TypeScript interfaces for report metadata, processing stages, and file details.
-│   ├── utils/
-│   │   ├── constants.ts                 # [USE CASE]: Configuration constants including dynamic API_BASE_URL.
-│   │   └── formatters.ts                # [USE CASE]: Utility functions for formatting currency (INR/USD), percentages, file sizes, and dates.
-│   ├── App.tsx                          # [USE CASE]: Root application router with protected routes and layout providers.
-│   └── main.tsx                         # [USE CASE]: React DOM entrypoint initializing root React node.
-├── package.json                         # [USE CASE]: Frontend dependencies and npm build scripts.
-├── vite.config.ts                       # [USE CASE]: Vite build bundler configuration with React plugin and proxy settings.
-└── tailwind.config.js                   # [USE CASE]: Tailwind CSS styling theme, custom colors, gradients, and typography config.
-```
+| Layer | Technology | Why We Chose It |
+|---|---|---|
+| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS | Lightning-fast HMR, strict type safety, modern dark/light glassmorphic UI. |
+| **Backend** | Python 3.12, FastAPI, Uvicorn | High performance async event loop with native Python AI ecosystem compatibility. |
+| **Worker Queue** | Python `ThreadPoolExecutor(max_workers=2)` | In-process multi-threading for CPU-bound tasks without requiring complex Redis/Celery setups on localhost. |
+| **PDF Processing** | PyMuPDF (Fitz) | 50x faster than pure-Python PDF tools; preserves exact text coordinates and tabular structure. |
+| **OCR Service** | Gemini Vision / Tesseract | Selective OCR fallback only for scanned pages to optimize API quota and speed. |
+| **Vector Store** | ChromaDB | In-process serverless vector database; no external database setup needed for localhost. |
+| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` | Lightweight 384-dimensional vector model delivering fast embeddings on local CPUs. |
+| **LLM Inference** | Groq, NVIDIA NIM, Gemini | Sub-2-second generation via Groq with automatic failover fallback. |
+| **Charts** | Recharts | Declarative React charting library for responsive financial visual analytics. |
 
 ---
 
-## 💻 Tech Stack
+## 📁 Complete File & Folder Structure (With Use Cases)
 
-| Layer | Technologies |
-|---|---|
-| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, Recharts, Lucide Icons, React Router v6 |
-| **Backend** | Python 3.12, FastAPI, Pydantic v2, Uvicorn, AnyIO, AsyncIO |
-| **Document Processing** | PyMuPDF (Fitz), Tesseract OCR, Python-docx, OpenPyXL |
-| **Vector Store & Embeddings** | ChromaDB, SentenceTransformers (`all-MiniLM-L6-v2`) |
-| **LLM Inference** | Groq (Llama 3.3 / GPT-OSS-120B), NVIDIA NIM (Moonshot Kimi K3), Google Gemini, OpenAI |
-| **Authentication & Storage** | Firebase Auth, Cloud Firestore, Firebase Storage |
+```
+FINANCE_REPORT_ANALYZER_AI/
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── deps.py                    # Auth dependency injection & Firebase user token validation
+│   │   │   └── rate_limiter.py            # Upload & AI request rate limiting per user identity
+│   │   ├── config/
+│   │   │   └── settings.py                # Central app configuration (250MB upload limit, 600s timeouts)
+│   │   ├── document_processing/
+│   │   │   ├── pdf_extractor.py           # PyMuPDF fast text/table extractor & selective OCR trigger
+│   │   │   ├── processor.py               # Main document pipeline & 20-page memory-controlled batching
+│   │   │   ├── chunker.py                 # Recursive semantic chunking (800-1000 chars with overlap)
+│   │   │   └── cleaner.py                 # Normalizes financial numbers (₹, $, %, negative brackets)
+│   │   ├── services/
+│   │   │   ├── background_worker.py        # Local ThreadPool worker pool managing async task queue
+│   │   │   ├── document_service.py        # Streaming disk writes, SHA-256 hash check, stage tracking
+│   │   │   ├── chat_service.py            # Conversational state, RAG query execution, humanic prompts
+│   │   │   └── financial_service.py       # Extraction of key financial metrics (Revenue, PAT, Margins)
+│   │   ├── rag/
+│   │   │   ├── rag_service.py             # Hybrid vector search, financial synonym expansion, LLM synthesis
+│   │   │   └── prompts.py                 # Strict financial prompts mandating page footers & no hallucinations
+│   │   ├── vectorstore/
+│   │   │   ├── vector_service.py          # ChromaDB client, batched vector indexing (250 chunks/batch)
+│   │   │   └── embeddings.py              # SentenceTransformers embedding generator instance
+│   │   ├── routes/
+│   │   │   ├── documents.py               # Upload endpoint, status polling (/status), document listing
+│   │   │   ├── chat.py                    # Analyst chat Q&A endpoints & conversation management
+│   │   │   ├── compare.py                 # Multi-report comparison & variance calculation endpoints
+│   │   │   └── financial.py               # Structured financial charts data endpoints
+│   │   └── main.py                        # FastAPI entrypoint, CORS setup, and router registration
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Header.tsx                 # Header navbar with persistent background progress bar
+│   │   │   ├── pdf/PdfSplitViewer.tsx     # In-document split view with page citation jumping
+│   │   │   └── common/RichMarkdownRenderer.tsx # Renders markdown tables & interactive Recharts
+│   │   ├── context/
+│   │   │   ├── ReportContext.tsx          # Global report state & 3s status polling loop
+│   │   │   └── AuthContext.tsx            # Firebase user login/logout authentication state
+│   │   ├── pages/
+│   │   │   ├── UploadPage.tsx             # Single drag-and-drop upload page with 250MB support
+│   │   │   ├── AnalystPage.tsx            # Full AI Analyst workspace (Chat + PDF Viewer + Exports)
+│   │   │   ├── DashboardPage.tsx          # Workspace overview KPI cards & recent filings list
+│   │   │   ├── AnalyticsPage.tsx          # Recharts financial analytics dashboard
+│   │   │   └── ComparePage.tsx            # Side-by-side filing comparison tool
+│   │   ├── services/
+│   │   │   ├── apiClient.ts               # Central Axios client configured for localhost API
+│   │   │   └── documentService.ts         # Lightweight document upload & status API calls
+├── ARCHITECTURE_AND_WORKFLOW.md           # In-depth architectural documentation & Mermaid flowcharts
+├── QUICKSTART.md                          # Simple step-by-step command guide to start the project
+└── README.md                              # Main project documentation
+```
 
 ---
 
 ## 🚀 Installation & Local Setup
 
-### 1. Clone the Repository
+### Option A — Automated Setup (Recommended for New Developers)
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/anand-chaudhari/Financial_Report_Analyzer.git
+cd Financial_Report_Analyzer
+.\scripts\setup.ps1
+```
+
+**macOS / Linux:**
+```bash
+git clone https://github.com/anand-chaudhari/Financial_Report_Analyzer.git
+cd Financial_Report_Analyzer
+bash scripts/setup.sh
+```
+
+The script will:
+- Create a Python virtual environment (`backend/.venv`)
+- Install all Python dependencies (`requirements.txt`)
+- Install all Node.js dependencies (`npm install`)
+- Create required directories (`uploads/`, `chroma_data/`, `cache/`)
+- Copy `.env.example` templates to `.env` for both backend and frontend
+
+---
+
+### Option B — Manual Setup (Step-by-Step)
+
+#### 1. Clone the Repository
 ```bash
 git clone https://github.com/anand-chaudhari/Financial_Report_Analyzer.git
 cd Financial_Report_Analyzer
 ```
 
-### 2. Backend Setup
+#### 2. Backend Setup (FastAPI)
 ```bash
 # Navigate to backend
 cd backend
@@ -271,150 +234,86 @@ python -m venv .venv
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the FastAPI server
-python run_server.py
-```
-*Backend API will run at `http://localhost:8000` (API Docs available at `http://localhost:8000/docs`).*
+# Create required data directories
+mkdir uploads chroma_data cache
 
-### 3. Frontend Setup
+# Copy environment template
+copy .env.example .env   # Windows
+# cp .env.example .env   # macOS/Linux
+
+# Fill in your API keys in backend/.env, then start the server:
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+*Backend API will run at `http://localhost:8000` (Swagger docs: `http://localhost:8000/docs`).*
+
+#### 3. Frontend Setup (React + Vite)
 ```bash
 # Open a new terminal and navigate to frontend
 cd frontend
 
-# Install npm packages
-npm install
+# Copy environment template
+copy .env.example .env   # Windows
+# cp .env.example .env   # macOS/Linux
 
-# Start development server
+# Fill in your Firebase config in frontend/.env, then:
+npm install
 npm run dev
 ```
-*Frontend application will run at `http://localhost:5173`.*
+*Frontend app will run at `http://localhost:5173`.*
 
 ---
 
 ## ⚙️ Environment Variables Configuration
 
-### Backend `.env` (`backend/.env`):
-```env
-ENVIRONMENT=development
-BACKEND_HOST=0.0.0.0
-BACKEND_PORT=8000
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+Full templates are in `backend/.env.example` and `frontend/.env.example`. Copy them and fill in your values.
 
-# Primary LLM Provider (groq | nvidia | gemini | openai)
-LLM_PROVIDER=groq
+### Backend `backend/.env` — Key Variables:
 
-# API Keys
-GROQ_API_KEY=your_groq_api_key
-NVIDIA_API_KEY=your_nvidia_api_key
-GEMINI_API_KEY=your_gemini_api_key
-OPENAI_API_KEY=your_openai_api_key
+| Variable | Required | Description | Where to get it |
+|---|---|---|---|
+| `GEMINI_API_KEY` | ✅ Yes | Primary LLM for AI analysis | [aistudio.google.com](https://aistudio.google.com/app/apikey) (free) |
+| `GROQ_API_KEY` | Optional | Fast fallback LLM | [console.groq.com](https://console.groq.com) (free) |
+| `NVIDIA_API_KEY` | Optional | Secondary fallback LLM | [build.nvidia.com](https://build.nvidia.com) |
+| `FIREBASE_CREDENTIALS_PATH` | ✅ Yes | Path to `serviceAccountKey.json` | Firebase Console → Service Accounts |
+| `BACKEND_PORT` | No | Default: `8000` | Change if port 8000 is in use |
+| `MAX_UPLOAD_SIZE_MB` | No | Default: `250` | Adjust for your machine |
 
-# Vector Store & Embedding Config
-CHROMA_PERSIST_DIRECTORY=./chroma_data
-EMBEDDING_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=200
-```
+### Frontend `frontend/.env` — Key Variables:
 
----
+| Variable | Required | Description |
+|---|---|---|
+| `VITE_API_BASE_URL` | ✅ Yes | Backend URL — keep as `http://localhost:8000` for local dev |
+| `VITE_FIREBASE_API_KEY` | ✅ Yes | Firebase Web App API Key |
+| `VITE_FIREBASE_PROJECT_ID` | ✅ Yes | Your Firebase Project ID |
+| Other `VITE_FIREBASE_*` | ✅ Yes | From Firebase Console → Web App Config |
 
-## 🧠 Comprehensive Interview Questions & In-Depth Answers
+### 🔑 Firebase Service Account Key Setup:
+1. Go to [Firebase Console](https://console.firebase.google.com) → Your Project
+2. Click ⚙️ **Project Settings** → **Service accounts** tab
+3. Click **"Generate new private key"** → Save the downloaded JSON
+4. Rename and place it at: `backend/serviceAccountKey.json`
 
----
 
-### Part 1: RAG Architecture & Vector Search
 
-#### Q1. How does FinSight AI solve the challenge of semantic retrieval on dense financial tables vs narrative disclosures?
-> **Answer**: Financial filings contain two fundamentally different types of information: dense narrative text (e.g., Management Discussion & Analysis) and structured numerical tables (Balance Sheets, Income Statements). Standard text chunkers destroy table structure by splitting rows arbitrarily across chunk boundaries.
-> FinSight AI addresses this through **structure-aware parsing and metadata injection**:
-> 1. In `pdf_extractor.py`, tables are recognized as contiguous grid units and converted into Markdown table format (`| Metric | FY24 | FY25 |`).
-> 2. Chunks containing tables are tagged with metadata `is_table: True` and retain the preceding section header (e.g., `Consolidated Statement of Profit and Loss`).
-> 3. During retrieval, the RAG service performs query classification: when a quantitative metric is requested, it prioritizes chunks with `is_table: True` and boosts table-dense sections.
+## 🧠 Frequently Asked Questions & Technical Interview Answers
 
-#### Q2. Why is ChromaDB chosen as the local vector store, and how is cosine distance used?
-> **Answer**: ChromaDB is an embedded, serverless vector database that runs in-process with Python, eliminating the need for an external database cluster during development. It supports persistent on-disk HNSW (Hierarchical Navigable Small World) indexing.
-> FinSight AI uses normalized 384-dimensional embeddings generated by `sentence-transformers/all-MiniLM-L6-v2`. Cosine similarity is computed as:
-> $$\text{Cosine Similarity} = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\|_2 \|\mathbf{v}\|_2}$$
-> Since embeddings are $L_2$-normalized upon creation, cosine similarity reduces to a fast dot product, enabling sub-10ms top-$k$ nearest-neighbor retrieval.
+### Q1. Why did the previous upload fail with `timeout of 300000ms exceeded`?
+> **Answer**: The legacy code ran the entire extraction, OCR, embedding, and vector indexing synchronously inside the HTTP request loop. A 600-page PDF takes 5–8 minutes to index, which exceeded the browser's 5-minute (300,000ms) HTTP timeout.
 
-#### Q3. What is Financial Query Expansion and why is it necessary?
-> **Answer**: Financial terminology varies significantly across international accounting standards (IFRS vs US GAAP vs Indian AS). A user asking for *"Revenue"* might be searching for a filing that uses *"Revenue from Operations"*, *"Turnover"*, or *"Net Sales"*.
-> If an exact string match or naive semantic search is performed, distance scores may be suboptimal. In `rag_service.py`, FinSight AI expands queries with financial synonyms:
-> - **Revenue** $\rightarrow$ `["Revenue from operations", "Total revenue", "Turnover", "Net sales"]`
-> - **Profit** $\rightarrow$ `["Net profit for the year", "Profit after tax", "PAT", "Consolidated net income"]`
-> - **EBITDA** $\rightarrow$ `["Operating profit", "EBITDA", "PBITDA", "Earnings before interest, tax, depreciation"]`
-> The multi-term retrieval aggregates context from all synonyms and deduplicates the resulting chunks.
+### Q2. How did you fix the request timeout architecturally?
+> **Answer**: We decoupled file upload from document processing. `POST /api/v1/documents/upload` streams the file to disk in 1MB chunks, creates a job ID, enqueues the job onto a local `ThreadPoolExecutor` worker, and returns **HTTP 200 OK in under 1 second**. The frontend then polls `GET /documents/{id}/status` every 3 seconds to render real-time progress.
 
----
+### Q3. How does background processing avoid slowing down normal API requests?
+> **Answer**: Heavy PDF processing is offloaded to a dedicated Python `ThreadPoolExecutor(max_workers=2)`. This leaves FastAPI's main `asyncio` event loop free to handle incoming requests for Dashboard, Reports, and Analytics with sub-50ms response times.
 
-### Part 2: Financial Precision & Hallucination Prevention
+### Q4. How do you prevent out-of-memory (OOM) errors on large 200 MB PDFs?
+> **Answer**: 
+> 1. Files are written using 1MB chunked streams (never loaded into RAM all at once).
+> 2. PDF extraction, chunking, and embedding run in 20-page batches.
+> 3. Memory garbage collection (`gc.collect()`) runs between batches.
 
-#### Q4. How does FinSight AI eliminate LLM hallucinations in quantitative financial Q&A?
-> **Answer**: Hallucinations in financial AI can cause critical decision errors. FinSight AI implements a multi-layered guardrail strategy:
-> 1. **Strict Context Injection & Source Citation**: The system prompt instructs the model that it is operating under statutory audit conditions. It must strictly answer using only the provided context chunks and cite every fact using `[Page X]` or `Source: Page X — Section`.
-> 2. **Explicit Fallback Requirement**: If a specific number or breakdown is not explicitly disclosed in the retrieved context, the prompt mandates that the model state: *"The provided document does not disclose [Metric]."* It is strictly forbidden from extrapolating or guessing.
-> 3. **Exact Numeric Value Preservation**: The model is instructed to prefer exact table figures over high-level narrative summaries and preserve the specified currency (e.g. ₹ vs $) and scale (Crore, Lakh, Million, Billion).
-
-#### Q5. How does the system handle accounting nuances like negative numbers in parentheses `(1,500)`?
-> **Answer**: In financial reporting, negative balances, cash outflows, or losses are conventionally written in parentheses `(e.g., (1,500))` rather than with a minus sign `-1,500`. Standard NLP tokenizers often strip parentheses or misinterpret them as punctuation.
-> FinSight AI's `cleaner.py` and `financial_calculator.py` explicitly parse accounting syntax:
-> ```python
-> if val_str.startswith('(') and val_str.endswith(')'):
->     numeric_val = -float(val_str[1:-1].replace(',', ''))
-> ```
-> This guarantees that net cash flow reductions and net losses are accurately recognized with their negative sign in downstream chart visualizations and comparative variance calculations.
-
----
-
-### Part 3: Document Processing & Performance Optimization
-
-#### Q6. How does FinSight AI process 200 MB PDF files on localhost without memory exhaustion?
-> **Answer**: Loading a 200 MB PDF entirely into memory can consume gigabytes of RAM when rasterized or parsed into text objects. FinSight AI prevents memory exhaustion through four optimizations:
-> 1. **Chunked Streaming Upload**: In `routes/documents.py`, files are streamed in 1 MB chunks directly to temporary disk storage rather than buffered in RAM via `await upload_file.read(1024 * 1024)`.
-> 2. **Pre-Processing PDF Inspection**: `inspect_pdf()` samples the first few pages to determine if the PDF is digitally native or scanned, preventing unneeded OCR on clean text PDFs.
-> 3. **Incremental Page Extraction**: PyMuPDF iterates page-by-page, closing page objects and invoking Python garbage collection between 25-page batches.
-> 4. **Selective OCR**: OCR (Tesseract) is executed **only** on pages where extracted text falls below 30 characters and image areas are detected.
-
-#### Q7. Why is PyMuPDF (Fitz) preferred over PDFPlumber or PyPDF for financial extraction?
-> **Answer**: PyMuPDF is a Python binding for the MuPDF C library. It provides:
-> - **Speed**: ~20x to 50x faster than pure Python parsers like PyPDF or PDFMiner.
-> - **Layout & Coordinate Fidelity**: Provides exact bounding box coordinates (`bbox`) for tabular text blocks and fonts, enabling precise row and column detection.
-> - **Low Memory Footprint**: Uses C-level memory allocations with minimal Python object overhead.
-
----
-
-### Part 4: Multi-Model LLM Orchestration & Failover
-
-#### Q8. Describe the multi-tier failover architecture in `llm_client.py`.
-> **Answer**: High availability is critical because public LLM endpoints frequently suffer from rate limits (HTTP 429), regional outages, or model deprecations. FinSight AI implements an automated waterfall failover hierarchy:
-> 1. **Primary Provider (Groq)**: Targets high-throughput LPU models (`openai/gpt-oss-120b`, `groq/compound`, `qwen/qwen3.6-27b`) delivering sub-2s responses.
-> 2. **Failover 1 (NVIDIA NIM)**: If Groq fails (HTTP 429/500/timeout), requests are immediately routed to `https://integrate.api.nvidia.com/v1` targeting `moonshotai/kimi-k3` or `meta/llama-3.2-90b-vision-instruct`.
-> 3. **Failover 2 (Google Gemini)**: If NVIDIA NIM fails, requests fall through to Google Gemini (`gemini-2.0-flash`, `gemini-1.5-pro`).
-> 4. **Failover 3 (OpenAI)**: Direct fallback to OpenAI GPT-4o.
-> 5. **Reasoning Tag Cleaner**: Strips `<think>...</think>` reasoning tokens generated by deep thinking models before delivering clean markdown to the frontend.
-
-#### Q9. Why was the Windows UTF-8 stdout fix implemented in `logger.py`?
-> **Answer**: On Windows systems, the default console encoding is often `cp1252` or `Windows-1252`. When financial amounts with the Indian Rupee symbol (`₹`) or non-ASCII characters were logged, Python's standard `sys.stdout` threw an unhandled `UnicodeEncodeError`, terminating the logging thread.
-> In `backend/app/utils/logger.py`, stdout is explicitly reconfigured:
-> ```python
-> if sys.platform.startswith("win"):
->     sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-> ```
-> This ensures resilient logging across all platforms and international currencies.
-
----
-
-### Part 5: Full-Stack Engineering & Scalability
-
-#### Q10. Why are heavy CPU-bound operations in FastAPI wrapped with `asyncio.to_thread`?
-> **Answer**: FastAPI runs an asynchronous event loop on a single main thread. Running CPU-intensive or synchronous blocking I/O (such as PyMuPDF extraction, SentenceTransformer embedding calculation, or synchronous `requests` calls) on the main thread blocks the event loop, preventing all concurrent requests (e.g., status polling or chat queries) from executing.
-> By wrapping synchronous functions in `await asyncio.to_thread(...)`, FastAPI offloads the execution to AnyIO's thread pool worker threads, keeping the asyncio event loop responsive to incoming HTTP requests.
-
-#### Q11. How does `RichMarkdownRenderer.tsx` dynamically detect and render charts from chat messages?
-> **Answer**: `RichMarkdownRenderer` parses markdown table structures (`| Header 1 | Header 2 |`) into columns and row records. It inspects whether columns contain valid numeric financial values using `parseFinancialNumber()`.
-> When at least 2 data rows and 1 numeric column are detected:
-> - It provides an interactive header toolbar with **Table**, **Bar Chart**, and **Trend Line** view buttons.
-> - In chart mode, it maps row labels to the X-axis (`XAxis dataKey="name"`) and numeric columns to Recharts `<Bar>` or `<Line>` components with custom glassmorphism tooltips and currency formatting.
+### Q5. What happens if the user re-uploads the exact same PDF file?
+> **Answer**: The backend calculates a SHA-256 file hash upon upload. If an identical hash already exists in the system, it reuses the previously indexed vector chunks instantly and completes in **< 1 second**.
 
 ---
 

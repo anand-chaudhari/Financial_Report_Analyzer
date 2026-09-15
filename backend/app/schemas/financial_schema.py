@@ -77,6 +77,8 @@ class FinancialChartDataResponse(BaseModel):
     
     # Key ratios & extras
     key_ratios: List[KeyRatio] = Field(default_factory=list)
+    executive_insights: List[str] = Field(default_factory=list)
+    executive_overview: Optional[str] = None
     raw_metrics: Dict[str, Any] = Field(default_factory=dict)
     extracted_at: datetime = Field(default_factory=datetime.utcnow)
 

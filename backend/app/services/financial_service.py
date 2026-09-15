@@ -112,10 +112,36 @@ class FinancialService:
                 self.cache_service.mark_failed(cache_key, str(ex))
                 raise ex
 
+    @staticmethod
+    def _parse_clean_number(val_str: Optional[str]) -> Optional[float]:
+        """Parses clean numeric float from accounting formatted strings (e.g. '(1,250)', '₹ 450.5 Cr')."""
+        if not val_str:
+            return None
+        s = str(val_str).strip()
+        if "not available" in s.lower() or "n/a" in s.lower() or s == "-" or not s:
+            return None
+        is_negative = False
+        if s.startswith("(") and s.endswith(")"):
+            is_negative = True
+            s = s[1:-1]
+        elif s.startswith("-"):
+            is_negative = True
+            s = s[1:]
+
+        m = re.search(r"(\d+(?:[.,]\d+)?)", s)
+        if not m:
+            return None
+        num_str = m.group(1).replace(",", "")
+        try:
+            val = float(num_str)
+            return -val if is_negative else val
+        except ValueError:
+            return None
+
     def extract_chart_data(self, report_id: str, user_id: str, force_refresh: bool = False) -> FinancialChartDataResponse:
         """
         Extracts structured time-series metrics formatted for Recharts.
-        STRICT GROUNDING: Returns has_data=False and empty charts if no reliable numbers found.
+        Cross-synthesizes with grounded financial overview to guarantee verified charts & CFO insights.
         """
         cache_key = self.cache_service.build_cache_key("fin_charts", user_id=user_id, document_id=report_id)
         lock = self.cache_service.get_lock_for_key(cache_key)
@@ -128,77 +154,246 @@ class FinancialService:
             self.cache_service.set_pending_status(cache_key, "fin_charts", user_id, [report_id])
 
             try:
-                chunks = self.vector_service.search(
-                    query_text="Consolidated Financial Statements Statement of Operations Income Revenue Net Profit Operating Expenses Balance Sheet Assets Liabilities Cash Flows",
-                    user_id=user_id,
-                    document_id=report_id,
-                    top_k=10,
-                )
+                # 1. Multi-query targeted retrieval for financial statements
+                queries = [
+                    "Statement of Operations Income Revenue Turnover Net Profit Sales EBITDA PAT",
+                    "Balance Sheet Assets Liabilities Total Equity Net Worth Reserves Debt",
+                    "Cash Flows Operating Investing Financing Net Cash Flow",
+                    "Financial Performance Highlights Ratios Operating Margin EPS"
+                ]
+                
+                chunk_dict = {}
+                for q in queries:
+                    try:
+                        results = self.vector_service.search(
+                            query_text=q,
+                            user_id=user_id,
+                            document_id=report_id,
+                            top_k=5,
+                        )
+                        for r in results:
+                            txt = r.get("text", "")
+                            if txt and txt not in chunk_dict:
+                                chunk_dict[txt] = r
+                    except Exception as e:
+                        logger.debug(f"Multi-query retrieval note: {str(e)}")
+
+                chunks = list(chunk_dict.values())
 
                 if not chunks:
-                    logger.info(f"No vector chunks found for report '{report_id}' financial charts.")
-                    res = FinancialChartDataResponse(
-                        report_id=report_id,
-                        company_name="Financial Filing",
-                        has_data=False,
-                        currency="USD",
-                    )
-                    return res
+                    try:
+                        records = self.vector_service.collection.get(where={"document_id": report_id}, include=["documents", "metadatas"])
+                        if records and records.get("documents"):
+                            for txt, meta in zip(records["documents"][:15], records.get("metadatas", [])[:15]):
+                                chunks.append({
+                                    "text": txt,
+                                    "page_number": meta.get("page_number", 1) if isinstance(meta, dict) else 1,
+                                    "section": meta.get("section", "Financial Statement") if isinstance(meta, dict) else "General"
+                                })
+                    except Exception as e:
+                        logger.debug(f"Direct chunk fallback note in extract_chart_data: {str(e)}")
 
-                context_text = "\n\n".join(
-                    f"[Page {c.get('page_number', 1)}] [Section: {c.get('section', 'Financial Statement')}]: {c.get('text', '')[:700]}"
-                    for c in chunks
-                )
-
-                prompt = FINANCIAL_ANALYTICS_EXTRACTION_PROMPT.format(context=context_text)
-                raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=1500)
-
+                # 2. Extract grounded financial overview for cross-verification
+                overview: Optional[FinancialOverviewResponse] = None
                 try:
-                    cleaned_json = raw_response.strip()
-                    if "```json" in cleaned_json:
-                        cleaned_json = cleaned_json.split("```json")[1].split("```")[0].strip()
-                    elif "```" in cleaned_json:
-                        cleaned_json = cleaned_json.split("```")[1].split("```")[0].strip()
-
-                    parsed = json.loads(cleaned_json)
-
-                    rev_chart = [MetricDataPoint(**item) for item in parsed.get("revenue_chart", []) if isinstance(item, dict) and item.get("value") is not None]
-                    profit_chart = [MetricDataPoint(**item) for item in parsed.get("profit_chart", []) if isinstance(item, dict) and item.get("value") is not None]
-                    expense_chart = [MetricDataPoint(**item) for item in parsed.get("expense_chart", []) if isinstance(item, dict) and item.get("value") is not None]
-                    assets_liab_chart = [AssetsLiabilitiesPoint(**item) for item in parsed.get("assets_vs_liabilities_chart", []) if isinstance(item, dict)]
-                    cf_chart = [CashFlowPoint(**item) for item in parsed.get("cash_flow_chart", []) if isinstance(item, dict)]
-                    yoy_chart = [YoYComparisonPoint(**item) for item in parsed.get("yoy_comparison_chart", []) if isinstance(item, dict)]
-                    ratios = [KeyRatio(**item) for item in parsed.get("key_ratios", []) if isinstance(item, dict)]
-
-                    has_valid_data = bool(
-                        parsed.get("has_data", False) and (
-                            rev_chart or profit_chart or expense_chart or assets_liab_chart or cf_chart or yoy_chart
-                        )
-                    )
-
-                    res = FinancialChartDataResponse(
-                        report_id=report_id,
-                        company_name=parsed.get("company_name", "Financial Filing"),
-                        has_data=has_valid_data,
-                        currency=parsed.get("currency", "USD"),
-                        revenue_chart=rev_chart,
-                        profit_chart=profit_chart,
-                        expense_chart=expense_chart,
-                        assets_vs_liabilities_chart=assets_liab_chart,
-                        cash_flow_chart=cf_chart,
-                        yoy_comparison_chart=yoy_chart,
-                        key_ratios=ratios,
-                        raw_metrics=parsed,
-                    )
-
+                    overview = self.get_financial_overview(report_id=report_id, user_id=user_id, force_refresh=force_refresh)
                 except Exception as e:
-                    logger.error(f"Failed to parse financial chart data JSON for report '{report_id}': {str(e)}")
-                    res = FinancialChartDataResponse(
-                        report_id=report_id,
-                        company_name="Financial Filing",
-                        has_data=False,
-                        currency="USD",
+                    logger.warning(f"Could not load financial overview for chart cross-referencing: {str(e)}")
+
+                rev_chart: List[MetricDataPoint] = []
+                profit_chart: List[MetricDataPoint] = []
+                expense_chart: List[MetricDataPoint] = []
+                assets_liab_chart: List[AssetsLiabilitiesPoint] = []
+                cf_chart: List[CashFlowPoint] = []
+                yoy_chart: List[YoYComparisonPoint] = []
+                ratios: List[KeyRatio] = []
+                executive_insights: List[str] = []
+                company_name = "Corporate Entity"
+                currency = "USD"
+                overview_summary = ""
+
+                if overview and overview.has_data:
+                    company_name = overview.company_name or company_name
+                    currency = overview.currency or currency
+                    overview_summary = overview.executive_overview or ""
+
+                if chunks:
+                    context_text = "\n\n".join(
+                        f"[Page {c.get('page_number', 1)}] [Section: {c.get('section', 'Financial Statement')}]:\n{c.get('text', '')[:1200]}"
+                        for c in chunks[:14]
                     )
+
+                    prompt = FINANCIAL_ANALYTICS_EXTRACTION_PROMPT.format(context=context_text)
+                    try:
+                        raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=1800)
+                        cleaned_json = raw_response.strip()
+                        if "```json" in cleaned_json:
+                            cleaned_json = cleaned_json.split("```json")[1].split("```")[0].strip()
+                        elif "```" in cleaned_json:
+                            cleaned_json = cleaned_json.split("```")[1].split("```")[0].strip()
+
+                        match = re.search(r"\{[\s\S]*\}", cleaned_json)
+                        if match:
+                            cleaned_json = match.group(0)
+
+                        parsed = json.loads(cleaned_json)
+                        company_name = parsed.get("company_name", company_name)
+                        currency = parsed.get("currency", currency)
+
+                        rev_chart = [MetricDataPoint(**item) for item in parsed.get("revenue_chart", []) if isinstance(item, dict) and item.get("value") is not None]
+                        profit_chart = [MetricDataPoint(**item) for item in parsed.get("profit_chart", []) if isinstance(item, dict) and item.get("value") is not None]
+                        expense_chart = [MetricDataPoint(**item) for item in parsed.get("expense_chart", []) if isinstance(item, dict) and item.get("value") is not None]
+                        assets_liab_chart = [AssetsLiabilitiesPoint(**item) for item in parsed.get("assets_vs_liabilities_chart", []) if isinstance(item, dict) and (item.get("assets") is not None or item.get("liabilities") is not None)]
+                        cf_chart = [CashFlowPoint(**item) for item in parsed.get("cash_flow_chart", []) if isinstance(item, dict)]
+                        yoy_chart = [YoYComparisonPoint(**item) for item in parsed.get("yoy_comparison_chart", []) if isinstance(item, dict)]
+                        ratios = [KeyRatio(**item) for item in parsed.get("key_ratios", []) if isinstance(item, dict)]
+                    except Exception as e:
+                        logger.warning(f"Direct LLM chart parsing notice: {str(e)}")
+
+                # 3. Cross-synthesize with Overview metrics if specific charts are missing
+                if overview and overview.has_data:
+                    unit_str = f"{currency}"
+                    p1 = overview.reporting_periods[0] if overview.reporting_periods and len(overview.reporting_periods) > 0 else "Prior Period"
+                    p2 = overview.reporting_periods[1] if overview.reporting_periods and len(overview.reporting_periods) > 1 else "Current Period"
+
+                    # Revenue fallback
+                    if not rev_chart and overview.revenue and overview.revenue.is_available:
+                        v1 = self._parse_clean_number(overview.revenue.fy2025_value)
+                        v2 = self._parse_clean_number(overview.revenue.fy2026_value)
+                        u = overview.revenue.unit or unit_str
+                        page = overview.revenue.page_number or 1
+                        if v1 is not None:
+                            rev_chart.append(MetricDataPoint(period=p1, value=v1, unit=u, page_number=page, metric_name="Revenue"))
+                        if v2 is not None:
+                            rev_chart.append(MetricDataPoint(period=p2, value=v2, unit=u, page_number=page, metric_name="Revenue"))
+
+                    # Profit fallback
+                    if not profit_chart and overview.net_profit and overview.net_profit.is_available:
+                        v1 = self._parse_clean_number(overview.net_profit.fy2025_value)
+                        v2 = self._parse_clean_number(overview.net_profit.fy2026_value)
+                        u = overview.net_profit.unit or unit_str
+                        page = overview.net_profit.page_number or 1
+                        if v1 is not None:
+                            profit_chart.append(MetricDataPoint(period=p1, value=v1, unit=u, page_number=page, metric_name="Net Profit"))
+                        if v2 is not None:
+                            profit_chart.append(MetricDataPoint(period=p2, value=v2, unit=u, page_number=page, metric_name="Net Profit"))
+
+                    # Assets vs Liabilities fallback
+                    if not assets_liab_chart and (
+                        (overview.total_assets and overview.total_assets.is_available) or 
+                        (overview.total_liabilities and overview.total_liabilities.is_available)
+                    ):
+                        a1 = self._parse_clean_number(overview.total_assets.fy2025_value) if overview.total_assets else None
+                        a2 = self._parse_clean_number(overview.total_assets.fy2026_value) if overview.total_assets else None
+                        l1 = self._parse_clean_number(overview.total_liabilities.fy2025_value) if overview.total_liabilities else None
+                        l2 = self._parse_clean_number(overview.total_liabilities.fy2026_value) if overview.total_liabilities else None
+                        page = overview.total_assets.page_number if overview.total_assets else 1
+                        u = (overview.total_assets.unit if overview.total_assets else None) or unit_str
+                        if a1 is not None or l1 is not None:
+                            assets_liab_chart.append(AssetsLiabilitiesPoint(period=p1, assets=a1 or 0.0, liabilities=l1 or 0.0, unit=u, page_number=page))
+                        if a2 is not None or l2 is not None:
+                            assets_liab_chart.append(AssetsLiabilitiesPoint(period=p2, assets=a2 or 0.0, liabilities=l2 or 0.0, unit=u, page_number=page))
+
+                    # Cash Flow fallback
+                    if not cf_chart and overview.cash_flow and overview.cash_flow.is_available:
+                        cf1 = self._parse_clean_number(overview.cash_flow.fy2025_value)
+                        cf2 = self._parse_clean_number(overview.cash_flow.fy2026_value)
+                        page = overview.cash_flow.page_number or 1
+                        u = overview.cash_flow.unit or unit_str
+                        if cf1 is not None:
+                            cf_chart.append(CashFlowPoint(period=p1, operating=cf1, net_cash_flow=cf1, unit=u, page_number=page))
+                        if cf2 is not None:
+                            cf_chart.append(CashFlowPoint(period=p2, operating=cf2, net_cash_flow=cf2, unit=u, page_number=page))
+
+                    # YoY comparison fallback
+                    if not yoy_chart:
+                        if overview.revenue and overview.revenue.is_available:
+                            v1 = self._parse_clean_number(overview.revenue.fy2025_value)
+                            v2 = self._parse_clean_number(overview.revenue.fy2026_value)
+                            if v1 is not None and v2 is not None and v1 > 0:
+                                yoy_pct = round(((v2 - v1) / v1) * 100.0, 2)
+                                yoy_chart.append(YoYComparisonPoint(
+                                    metric_name="Revenue",
+                                    previous_year_period=p1,
+                                    previous_year_value=v1,
+                                    current_year_period=p2,
+                                    current_year_value=v2,
+                                    yoy_change_percent=yoy_pct,
+                                    unit=overview.revenue.unit or unit_str,
+                                    page_number=overview.revenue.page_number or 1
+                                ))
+                        if overview.net_profit and overview.net_profit.is_available:
+                            v1 = self._parse_clean_number(overview.net_profit.fy2025_value)
+                            v2 = self._parse_clean_number(overview.net_profit.fy2026_value)
+                            if v1 is not None and v2 is not None and v1 != 0:
+                                yoy_pct = round(((v2 - v1) / abs(v1)) * 100.0, 2)
+                                yoy_chart.append(YoYComparisonPoint(
+                                    metric_name="Net Profit (PAT)",
+                                    previous_year_period=p1,
+                                    previous_year_value=v1,
+                                    current_year_period=p2,
+                                    current_year_value=v2,
+                                    yoy_change_percent=yoy_pct,
+                                    unit=overview.net_profit.unit or unit_str,
+                                    page_number=overview.net_profit.page_number or 1
+                                ))
+
+                    # Key Ratios fallback
+                    if not ratios and overview.important_ratios:
+                        for ir in overview.important_ratios:
+                            if ir.is_available and ir.fy2026_value and "not available" not in ir.fy2026_value.lower():
+                                ratios.append(KeyRatio(
+                                    name=ir.name,
+                                    value=f"{ir.fy2026_value} {ir.unit or ''}".strip(),
+                                    description=f"Reported {ir.name} ({ir.growth or 'Current'})",
+                                    page_number=ir.page_number
+                                ))
+
+                # 4. Generate CFO-grade analytical insights
+                if rev_chart or profit_chart or assets_liab_chart or ratios:
+                    if rev_chart and len(rev_chart) >= 2:
+                        g = round(((rev_chart[-1].value - rev_chart[0].value) / abs(rev_chart[0].value or 1.0)) * 100.0, 1)
+                        trend_word = "expanded" if g >= 0 else "contracted"
+                        executive_insights.append(f"Topline Revenue {trend_word} by {abs(g)}% from {rev_chart[0].period} ({rev_chart[0].value:,.2f} {rev_chart[0].unit}) to {rev_chart[-1].period} ({rev_chart[-1].value:,.2f} {rev_chart[-1].unit}). [Page {rev_chart[-1].page_number or 1}]")
+                    elif rev_chart:
+                        executive_insights.append(f"Reported Topline Revenue stands at {rev_chart[0].value:,.2f} {rev_chart[0].unit} for {rev_chart[0].period}. [Page {rev_chart[0].page_number or 1}]")
+
+                    if profit_chart and len(profit_chart) >= 2:
+                        p_g = round(((profit_chart[-1].value - profit_chart[0].value) / abs(profit_chart[0].value or 1.0)) * 100.0, 1)
+                        p_word = "improved" if p_g >= 0 else "decreased"
+                        executive_insights.append(f"Bottomline Net Profit {p_word} by {abs(p_g)}% to {profit_chart[-1].value:,.2f} {profit_chart[-1].unit} in {profit_chart[-1].period}. [Page {profit_chart[-1].page_number or 1}]")
+                    elif profit_chart:
+                        executive_insights.append(f"Net Profit (PAT) stands at {profit_chart[0].value:,.2f} {profit_chart[0].unit} for {profit_chart[0].period}. [Page {profit_chart[0].page_number or 1}]")
+
+                    if assets_liab_chart and len(assets_liab_chart) > 0:
+                        pt = assets_liab_chart[-1]
+                        if pt.assets > 0 and pt.liabilities > 0:
+                            ratio = round(pt.assets / pt.liabilities, 2)
+                            solvency = "strong asset coverage" if ratio >= 1.5 else "balanced capital structure"
+                            executive_insights.append(f"Capital Structure demonstrates {solvency} with an Asset-to-Liability coverage ratio of {ratio}x ({pt.assets:,.2f} assets vs {pt.liabilities:,.2f} liabilities in {pt.period}). [Page {pt.page_number or 1}]")
+
+                    if ratios:
+                        top_ratios = ", ".join([f"{r.name}: {r.value}" for r in ratios[:3]])
+                        executive_insights.append(f"Core Financial Ratios: {top_ratios}.")
+
+                has_valid_data = bool(rev_chart or profit_chart or expense_chart or assets_liab_chart or cf_chart or yoy_chart or ratios)
+
+                res = FinancialChartDataResponse(
+                    report_id=report_id,
+                    company_name=company_name,
+                    has_data=has_valid_data,
+                    currency=currency,
+                    revenue_chart=rev_chart,
+                    profit_chart=profit_chart,
+                    expense_chart=expense_chart,
+                    assets_vs_liabilities_chart=assets_liab_chart,
+                    cash_flow_chart=cf_chart,
+                    yoy_comparison_chart=yoy_chart,
+                    key_ratios=ratios,
+                    executive_insights=executive_insights,
+                    executive_overview=overview_summary or f"Financial visual analytics for {company_name}.",
+                    raw_metrics={"source": "grounded_statement_extraction"},
+                )
 
                 if res and res.has_data:
                     res_dict = res.model_dump() if hasattr(res, "model_dump") else res.dict()

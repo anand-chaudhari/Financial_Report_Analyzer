@@ -202,6 +202,18 @@ class PDFExtractor:
         max_pages = getattr(settings, "MAX_PDF_PAGES", 2000)
         workers = getattr(settings, "PARALLEL_EXTRACTION_WORKERS", 8)
         workers = min(workers, os.cpu_count() or 4)
+        # Cap concurrency for very large documents to avoid RAM/thread thrash
+        file_size_bytes = len(pdf_source) if isinstance(pdf_source, bytes) else (
+            os.path.getsize(pdf_source) if isinstance(pdf_source, str) and os.path.exists(pdf_source) else 0
+        )
+        if file_size_bytes > 50 * 1024 * 1024:   # > 50 MB
+            workers = min(workers, 4)
+        elif file_size_bytes > 20 * 1024 * 1024:  # > 20 MB
+            workers = min(workers, 6)
+
+        # Per-page extraction timeout: prevents a single hung PyMuPDF call from
+        # blocking the whole batch (e.g. corrupted or heavily-encrypted pages).
+        _PAGE_FUTURE_TIMEOUT_SEC: float = 30.0
 
         # 1. Pre-flight Inspection
         if on_progress:
@@ -239,25 +251,36 @@ class PDFExtractor:
             batch_indices = list(range(batch_start, batch_end))
             if len(batch_indices) <= 2:
                 for i in batch_indices:
-                    page_data[i] = _extract_single_page_worker(pdf_source, i)
+                    try:
+                        page_data[i] = _extract_single_page_worker(pdf_source, i)
+                    except Exception as exc:
+                        logger.warning(f"Page {i + 1} extraction failed (serial): {str(exc)}")
+                        page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False}
             else:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                     future_to_idx = {
                         executor.submit(_extract_single_page_worker, pdf_source, i): i
                         for i in batch_indices
                     }
-                    for future in concurrent.futures.as_completed(future_to_idx):
+                    for future in concurrent.futures.as_completed(future_to_idx, timeout=_PAGE_FUTURE_TIMEOUT_SEC * len(batch_indices)):
                         idx = future_to_idx[future]
                         try:
-                            page_data[idx] = future.result()
+                            # Per-future timeout: if a page takes too long, skip it gracefully
+                            page_data[idx] = future.result(timeout=_PAGE_FUTURE_TIMEOUT_SEC)
+                        except concurrent.futures.TimeoutError:
+                            logger.warning(
+                                f"Page {idx + 1} extraction timed out after {_PAGE_FUTURE_TIMEOUT_SEC:.0f}s — skipping."
+                            )
+                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False}
                         except Exception as exc:
                             logger.error(f"Page {idx + 1} extraction failed: {str(exc)}")
-                            page_data[idx] = {
-                                "page_number": idx + 1,
-                                "text": "",
-                                "image_count": 0,
-                                "is_scanned": False,
-                            }
+                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False}
+
+            # Fill any None slots that as_completed may have skipped on early timeout
+            for i in batch_indices:
+                if page_data[i] is None:
+                    logger.warning(f"Page {i + 1} was not extracted (timeout or error) — using empty fallback.")
+                    page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False}
 
             gc.collect()
 

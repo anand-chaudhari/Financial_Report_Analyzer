@@ -20,6 +20,14 @@ from ..config import get_settings
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+settings = get_settings()
+
+# Timeout for full PDF processing pipeline (extraction + embedding + indexing).
+# Defaults to PDF_PROCESSING_TIMEOUT_SEC from settings (600s). Large annual
+# reports (300+ pages, 1000+ chunks) can take several minutes.
+_UPLOAD_TIMEOUT_SEC: float = float(getattr(settings, "PDF_PROCESSING_TIMEOUT_SEC", 600))
+# Timeout for AI-heavy analysis endpoints (overview, risks, summary)
+_AI_ANALYSIS_TIMEOUT_SEC: float = 300.0
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 document_service = DocumentService()
@@ -98,11 +106,14 @@ async def upload_document(
 
     # 3. Process & Store Document (Extract metadata, save to Firestore asynchronously without blocking event loop)
     try:
-        doc = await asyncio.to_thread(
-            document_service.process_and_save_upload,
-            file_path=temp_file_path,
-            filename=cleaned_filename,
-            user_id=user_id
+        doc = await asyncio.wait_for(
+            asyncio.to_thread(
+                document_service.process_and_save_upload,
+                file_path=temp_file_path,
+                filename=cleaned_filename,
+                user_id=user_id,
+            ),
+            timeout=_UPLOAD_TIMEOUT_SEC,
         )
 
         metadata = DocumentMetadata(
@@ -129,6 +140,20 @@ async def upload_document(
             data=metadata
         )
 
+    except asyncio.TimeoutError:
+        timeout_min = int(_UPLOAD_TIMEOUT_SEC // 60)
+        logger.error(
+            f"Document processing timed out after {_UPLOAD_TIMEOUT_SEC:.0f}s "
+            f"for user '{user_id}': '{cleaned_filename}'"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                f"Document processing exceeded the {timeout_min}-minute time limit. "
+                "This usually happens with very large PDFs (300+ pages) or slow embedding. "
+                "Please try again — the document may already be partially indexed and will process faster on retry."
+            ),
+        )
     except Exception as e:
         logger.error(f"Error processing document upload: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -297,13 +322,25 @@ async def generate_document_summary(
     """
     user_id = current_user["uid"]
     try:
-        summary = await asyncio.to_thread(
-            summary_service.generate_document_summary,
-            document_id=document_id,
-            user_id=user_id,
-            force_refresh=refresh,
+        summary = await asyncio.wait_for(
+            asyncio.to_thread(
+                summary_service.generate_document_summary,
+                document_id=document_id,
+                user_id=user_id,
+                force_refresh=refresh,
+            ),
+            timeout=_AI_ANALYSIS_TIMEOUT_SEC,
         )
         return summary
+    except asyncio.TimeoutError:
+        logger.error(f"Summary generation timed out for document '{document_id}'")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                f"Summary generation exceeded the {int(_AI_ANALYSIS_TIMEOUT_SEC // 60)}-minute time limit. "
+                "The document may be very large. Please try again."
+            ),
+        )
     except Exception as e:
         logger.error(f"Error generating document summary for '{document_id}': {str(e)}", exc_info=True)
         raise HTTPException(
@@ -324,11 +361,23 @@ async def get_document_financial_overview(
     """
     user_id = current_user["uid"]
     try:
-        return await asyncio.to_thread(
-            financial_service.get_financial_overview,
-            report_id=document_id,
-            user_id=user_id,
-            force_refresh=refresh,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                financial_service.get_financial_overview,
+                report_id=document_id,
+                user_id=user_id,
+                force_refresh=refresh,
+            ),
+            timeout=_AI_ANALYSIS_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Financial overview timed out for document '{document_id}'")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                f"Financial overview generation exceeded the {int(_AI_ANALYSIS_TIMEOUT_SEC // 60)}-minute time limit. "
+                "Please try again."
+            ),
         )
     except Exception as e:
         logger.error(f"Error generating financial overview for '{document_id}': {str(e)}", exc_info=True)
@@ -350,11 +399,23 @@ async def get_document_financial_risks(
     """
     user_id = current_user["uid"]
     try:
-        return await asyncio.to_thread(
-            financial_service.analyze_financial_risks,
-            report_id=document_id,
-            user_id=user_id,
-            force_refresh=refresh,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                financial_service.analyze_financial_risks,
+                report_id=document_id,
+                user_id=user_id,
+                force_refresh=refresh,
+            ),
+            timeout=_AI_ANALYSIS_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Risk analysis timed out for document '{document_id}'")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                f"Risk analysis exceeded the {int(_AI_ANALYSIS_TIMEOUT_SEC // 60)}-minute time limit. "
+                "Please try again."
+            ),
         )
     except Exception as e:
         logger.error(f"Error analyzing risks for '{document_id}': {str(e)}", exc_info=True)

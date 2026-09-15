@@ -1,94 +1,117 @@
-# FinSight AI — Quick Start Command Guide
+# 🚀 FinSight AI — Quick Start Guide (Localhost Execution)
 
-> **Note**: You **DO NOT** need to re-install `requirements.txt` or `npm install` every time! You only need to run the start commands below.
+> **Note**: You **DO NOT** need to re-install `requirements.txt` or `npm install` every time you restart the project! You only need to run the start commands listed below.
 
 ---
 
-## 🚀 How to Start the Project Locally (Full Local Stack)
+## 📌 Summary: How FinSight AI Works on Localhost
 
-Open **two separate terminals** in your terminal application or IDE.
+FinSight AI runs **100% locally** on your machine.
+- **Backend (FastAPI)**: Serves API requests on `http://localhost:8000` and processes 600+ page PDFs in the background using a local thread pool worker.
+- **Frontend (React + Vite)**: Displays the analyst interface on `http://localhost:5173` and polls job status in real-time.
+
+---
+
+## 🏃 How to Start the Project (Step-by-Step)
+
+Open **two separate terminal windows** on your machine.
 
 ---
 
 ### Terminal 1: Backend Server (FastAPI)
 
-#### Windows (PowerShell / CMD)
+#### Why this command?
+We use `python -m uvicorn app.main:app` without `--reload` on Windows to prevent sub-process permission issues while maintaining fast multi-threaded execution.
+
+#### 🪟 Windows (PowerShell / Command Prompt)
 ```powershell
+# 1. Go to backend folder
 cd backend
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 2. Start the FastAPI server using the virtual environment
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-#### macOS / Linux
+#### 🍎 macOS / 🐧 Linux
 ```bash
+# 1. Go to backend folder
 cd backend
+
+# 2. Activate virtual environment
 source .venv/bin/activate
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 3. Start the FastAPI server
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-*Backend API will be running at*: `http://localhost:8000`  
-*Swagger Documentation*: `http://localhost:8000/docs`
+*  **Backend API URL**: `http://localhost:8000`
+* 📖 **Interactive API Specs (Swagger Docs)**: `http://localhost:8000/docs`
 
 ---
 
-### Terminal 2: Frontend App (React + Vite)
+### Terminal 2: Frontend Application (React + Vite)
 
-#### Windows / macOS / Linux
+#### Why this command?
+`npm run dev` launches Vite's lightning-fast development server with hot-module reloading (HMR).
+
+#### 🪟 Windows / 🍎 macOS / 🐧 Linux
 ```bash
+# 1. Go to frontend folder
 cd frontend
+
+# 2. Start Vite dev server
 npm run dev
 ```
 
-*Frontend Web Application will be running at*: `http://localhost:5173`
-
-> ✅ The frontend `.env` is pre-configured with `VITE_API_BASE_URL=http://localhost:8000/api/v1`  
-> All API calls go **directly to your local backend** — Render is NOT involved.
+* 🌐 **Frontend Web Application URL**: `http://localhost:5173`
 
 ---
 
-## 🔑 First-Time Setup: Firebase Credentials
+## 🔑 Firebase Credentials Setup (First-Time Only)
 
-The backend needs a `serviceAccountKey.json` to verify user logins (Firebase JWT tokens).
+The backend uses `serviceAccountKey.json` to verify user logins.
 
-**Without this file, every API call returns 401 Unauthorized.**
+> 💡 **Note**: In development mode (`ENVIRONMENT=development`), if no key is present, dev fallback authentication allows testing locally without blocking. However, to enable full Firebase Auth and Firestore syncing, place your key in `backend/serviceAccountKey.json`.
 
-### How to get it:
-1. Go to [Firebase Console](https://console.firebase.google.com) → your project
-2. Click ⚙️ **Project Settings** → **Service accounts** tab
-3. Click **"Generate new private key"** → Download the JSON file
-4. Rename it to `serviceAccountKey.json` and move it to:
+### How to get your key:
+1. Open the [Firebase Console](https://console.firebase.google.com).
+2. Select your project → Click ⚙️ **Project Settings** → **Service accounts** tab.
+3. Click **"Generate new private key"** to download the JSON file.
+4. Move and rename the file to:
    ```
-   C:\Users\Anand\FINANCE_REPORT_ANALYZER_AI\backend\serviceAccountKey.json
+   FINANCE_REPORT_ANALYZER_AI/backend/serviceAccountKey.json
    ```
-5. Restart the backend — done ✅
-
-> ⚠️ Never commit `serviceAccountKey.json` to GitHub — it's already in `.gitignore`.
+5. Restart Terminal 1 (Backend).
 
 ---
 
-## 🔄 Environment Modes
+## 🧪 Testing Large PDF Uploads (600+ Pages)
 
-| Mode | Frontend URL | Backend | Change |
-|---|---|---|---|
-| **Local Full Stack** | `localhost:5173` | `localhost:8000` (your CPU) | Default — nothing to change |
-| **Local Frontend → Render** | `localhost:5173` | Render server | In `frontend/.env`, change URL to `/api/v1` |
-| **Production (Firebase)** | `financereportai.web.app` | Render server | Automatic via `.env.production` |
+1. Open `http://localhost:5173` in your browser and log in.
+2. Go to **Upload Report** page.
+3. Drag and drop a large financial report (e.g., 600-page annual report up to 250 MB).
+4. Click **Process Document**.
+5. **Notice what happens**:
+   - The upload completes in **under 1 second**.
+   - You are immediately redirected to **My Reports**.
+   - A live progress banner appears in the top navigation bar showing progress (`Queued` → `Analyzing` → `Extracting` → `Embedding` → `Indexing` → `Ready`).
+   - You can click around **Dashboard**, **Analytics**, **AI Analyst**, and **Settings** while processing continues in the background without any lag!
 
 ---
 
 ## ❓ Frequently Asked Questions
 
-### Do I need to run `pip install -r requirements.txt` every time?
-**NO.** Packages are already installed inside `.venv`. You only need to run `pip install` if new python packages are added to the project.
+### 1. Do I need to run `pip install` or `npm install` every time?
+**NO.** Dependencies are saved in your `.venv` and `node_modules` folders. You only run install commands if new packages are added to `requirements.txt` or `package.json`.
 
-### Why did I get `ERR_CONNECTION_REFUSED`?
-The backend Terminal is closed or not running. Make sure Terminal 1 shows:  
-`Uvicorn running on http://0.0.0.0:8000`
+### 2. What does `ERR_CONNECTION_REFUSED` mean?
+This means Terminal 1 (Backend) is not running. Make sure Terminal 1 is active and displays:
+```
+INFO: Uvicorn running on http://0.0.0.0:8000
+```
 
-### Why do I get `401 Unauthorized`?
-`serviceAccountKey.json` is missing from the `backend/` folder. Follow the **Firebase Credentials** section above.
+### 3. Why is the first upload slightly slower?
+On the very first run, FinSight AI downloads the lightweight SentenceTransformer embedding model (`sentence-transformers/all-MiniLM-L6-v2`, ~90 MB) to your local cache. This happens only once. All subsequent uploads use the cached model.
 
-### Why is PDF upload slow on first run?
-The first upload downloads the AI embedding model (`sentence-transformers/all-MiniLM-L6-v2`, ~90MB) to your local machine. This is a one-time download. Subsequent uploads are fast.
-
-### How do I stop the servers?
-Click inside the terminal window and press **`Ctrl + C`**.
+### 4. How do I stop both servers?
+Go to each terminal window and press **`Ctrl + C`**.
