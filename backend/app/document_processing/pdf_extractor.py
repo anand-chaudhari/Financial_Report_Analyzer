@@ -1,17 +1,20 @@
+import os
 import io
 import gc
-import os
+import re
+import time
 import concurrent.futures
-from dataclasses import dataclass
-from typing import List, Union, Optional, Dict, Any, Callable
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Callable, Union
+
 try:
     import pymupdf as fitz
 except ImportError:
     import fitz
 
-from .ocr_extension import OCRExtensionHook
 from ..config import get_settings
 from ..utils.logger import setup_logger
+from .ocr_extension import OCRExtensionHook
 
 logger = setup_logger(__name__)
 
@@ -25,6 +28,8 @@ class ExtractedPage:
     is_empty: bool = False
     is_scanned: bool = False
     has_tables: bool = False
+    unprocessed_ocr: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 def _extract_single_page_worker(doc_bytes_or_path: Union[bytes, str], page_idx: int) -> Dict[str, Any]:
@@ -45,31 +50,25 @@ def _extract_single_page_worker(doc_bytes_or_path: Union[bytes, str], page_idx: 
         text = page.get_text("text") or ""
 
         # B. Table extraction (only if table markers or multi-column tabs/spaces exist)
-        has_table_delims = "\t" in text or "|" in text
-        if not has_table_delims and "   " in text:
-            # Check if there are numeric tabular data lines
-            has_table_delims = any(
-                sum(1 for char in line if char.isdigit()) >= 3 and "  " in line
-                for line in text.split("\n")[:10]
-            )
-
+        table_markdowns: List[str] = []
+        has_table_delims = any(marker in text for marker in ["\t", "   ", "---", "|"])
         if has_table_delims:
             try:
                 tabs = page.find_tables()
                 if tabs and getattr(tabs, "tables", None) and len(tabs.tables) > 0:
                     table_mds = []
-                    for tab in tabs:
-                        df = tab.extract()
-                        if df and len(df) > 0:
-                            header = " | ".join(str(cell or "").strip().replace("\n", " ") for cell in df[0])
-                            separator = " | ".join("---" for _ in df[0])
-                            rows = [" | ".join(str(cell or "").strip().replace("\n", " ") for cell in row) for row in df[1:]]
-                            table_md = f"| {header} |\n| {separator} |\n" + "\n".join(f"| {r} |" for r in rows)
-                            table_mds.append(table_md)
+                    for t in tabs.tables:
+                        try:
+                            md = t.to_markdown()
+                            if md and len(md.strip()) > 15:
+                                table_mds.append(md.strip())
+                        except Exception:
+                            pass
                     if table_mds:
-                        text = f"{text}\n\n" + "\n\n".join(table_mds)
-            except Exception:
-                pass
+                        text = text + "\n\n" + "\n\n".join(table_mds)
+                        table_markdowns = table_mds
+            except Exception as tab_ex:
+                logger.debug(f"find_tables note on page {page_num}: {str(tab_ex)}")
 
         # C. Layout blocks fallback if text is sparse
         if len(text.strip()) < 30:
@@ -87,6 +86,7 @@ def _extract_single_page_worker(doc_bytes_or_path: Union[bytes, str], page_idx: 
             "text": text,
             "image_count": image_count,
             "is_scanned": is_scanned,
+            "tables": table_markdowns,
         }
     except Exception as e:
         logger.warning(f"Error extracting page {page_idx + 1}: {str(e)}")
@@ -95,6 +95,7 @@ def _extract_single_page_worker(doc_bytes_or_path: Union[bytes, str], page_idx: 
             "text": "",
             "image_count": 0,
             "is_scanned": False,
+            "tables": [],
         }
     finally:
         if doc is not None:
@@ -107,7 +108,8 @@ class PDFExtractor:
     Optimized for large files up to 200MB on localhost:
     - Pre-flight inspection of page count, text characteristics, and OCR requirements
     - Memory-bounded batch page extraction
-    - Selective OCR only on verified scanned pages
+    - Selective page-level OCR on verified image-only pages
+    - Reports unprocessed OCR pages transparently without silent data loss
     - Real-time stage progress reporting
     """
 
@@ -118,7 +120,7 @@ class PDFExtractor:
     def inspect_pdf(pdf_source: Union[bytes, str]) -> Dict[str, Any]:
         """
         Pre-flight inspector: Checks page count, file size, text density, and whether OCR is required.
-        Does not assume a large file requires OCR.
+        Intelligently differentiates text-native digital reports from scanned image PDFs.
         """
         doc = None
         try:
@@ -139,16 +141,25 @@ class PDFExtractor:
                     "sample_chars_avg": 0,
                 }
 
-            # Sample pages across beginning, middle, and end (up to 8 pages)
-            sample_indices = []
+            # Sample pages across beginning, middle, and end
             if total_pages <= 6:
                 sample_indices = list(range(total_pages))
             else:
-                sample_indices = [0, 1, total_pages // 2, min(total_pages // 2 + 1, total_pages - 1), total_pages - 2, total_pages - 1]
-                sample_indices = sorted(list(set(sample_indices)))
+                sample_indices = sorted(list(set([
+                    0,
+                    1,
+                    total_pages // 4,
+                    total_pages // 2,
+                    min(total_pages // 2 + 1, total_pages - 1),
+                    (3 * total_pages) // 4,
+                    total_pages - 2,
+                    total_pages - 1
+                ])))
 
             total_sample_chars = 0
             scanned_sample_pages = 0
+            text_rich_pages = 0
+
             for idx in sample_indices:
                 try:
                     pg = doc[idx]
@@ -158,12 +169,21 @@ class PDFExtractor:
                     total_sample_chars += char_count
                     if char_count < 40 and len(imgs) > 0:
                         scanned_sample_pages += 1
+                    if char_count >= 100:
+                        text_rich_pages += 1
                 except Exception:
                     pass
 
-            avg_chars = total_sample_chars / max(len(sample_indices), 1)
-            is_scanned = (scanned_sample_pages == len(sample_indices)) and avg_chars < 30
-            is_mixed = scanned_sample_pages > 0 and not is_scanned
+            num_samples = max(len(sample_indices), 1)
+            avg_chars = total_sample_chars / num_samples
+
+            is_scanned = (scanned_sample_pages == num_samples) and avg_chars < 30
+            is_mixed = (
+                not is_scanned
+                and scanned_sample_pages >= max(2, int(num_samples * 0.5))
+                and avg_chars < 150
+                and text_rich_pages < max(1, int(num_samples * 0.4))
+            )
 
             if is_scanned:
                 classification = "scanned_image"
@@ -201,8 +221,8 @@ class PDFExtractor:
         settings = get_settings()
         max_pages = getattr(settings, "MAX_PDF_PAGES", 2000)
         workers = getattr(settings, "PARALLEL_EXTRACTION_WORKERS", 8)
-        workers = min(workers, os.cpu_count() or 4)
-        # Cap concurrency for very large documents to avoid RAM/thread thrash
+        workers = min(workers, max(os.cpu_count() or 4, 4))
+
         file_size_bytes = len(pdf_source) if isinstance(pdf_source, bytes) else (
             os.path.getsize(pdf_source) if isinstance(pdf_source, str) and os.path.exists(pdf_source) else 0
         )
@@ -211,9 +231,7 @@ class PDFExtractor:
         elif file_size_bytes > 20 * 1024 * 1024:  # > 20 MB
             workers = min(workers, 6)
 
-        # Per-page extraction timeout: prevents a single hung PyMuPDF call from
-        # blocking the whole batch (e.g. corrupted or heavily-encrypted pages).
-        _PAGE_FUTURE_TIMEOUT_SEC: float = 30.0
+        _PAGE_FUTURE_TIMEOUT_SEC: float = 15.0
 
         # 1. Pre-flight Inspection
         if on_progress:
@@ -221,8 +239,7 @@ class PDFExtractor:
 
         inspection = self.inspect_pdf(pdf_source)
         total_pages = inspection["total_pages"]
-        ocr_required = inspection["ocr_required"]
-        classification = inspection["classification"]
+        avg_chars = inspection.get("sample_chars_avg", 0)
 
         if total_pages > max_pages:
             raise ValueError(f"PDF page count ({total_pages}) exceeds the maximum allowed limit of {max_pages} pages.")
@@ -232,7 +249,7 @@ class PDFExtractor:
 
         # 2. Extract pages in memory-controlled batches
         page_data: List[Dict[str, Any]] = [None] * total_pages
-        PAGE_BATCH_SIZE = 25  # Controlled page batches for zero memory buildup
+        PAGE_BATCH_SIZE = 30  # Optimized batch size for throughput and memory efficiency
 
         for batch_start in range(0, total_pages, PAGE_BATCH_SIZE):
             if cancellation_token and getattr(cancellation_token, "is_set", lambda: False)():
@@ -240,7 +257,7 @@ class PDFExtractor:
                 raise InterruptedError("Document processing was cancelled.")
 
             batch_end = min(batch_start + PAGE_BATCH_SIZE, total_pages)
-            pct = 20 + int((batch_start / total_pages) * 40)
+            pct = 20 + int((batch_start / total_pages) * 45)
             if on_progress:
                 on_progress(
                     "Extracting",
@@ -255,7 +272,7 @@ class PDFExtractor:
                         page_data[i] = _extract_single_page_worker(pdf_source, i)
                     except Exception as exc:
                         logger.warning(f"Page {i + 1} extraction failed (serial): {str(exc)}")
-                        page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False}
+                        page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False, "tables": []}
             else:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                     future_to_idx = {
@@ -265,60 +282,58 @@ class PDFExtractor:
                     for future in concurrent.futures.as_completed(future_to_idx, timeout=_PAGE_FUTURE_TIMEOUT_SEC * len(batch_indices)):
                         idx = future_to_idx[future]
                         try:
-                            # Per-future timeout: if a page takes too long, skip it gracefully
                             page_data[idx] = future.result(timeout=_PAGE_FUTURE_TIMEOUT_SEC)
                         except concurrent.futures.TimeoutError:
                             logger.warning(
                                 f"Page {idx + 1} extraction timed out after {_PAGE_FUTURE_TIMEOUT_SEC:.0f}s — skipping."
                             )
-                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False}
+                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False, "tables": []}
                         except Exception as exc:
                             logger.error(f"Page {idx + 1} extraction failed: {str(exc)}")
-                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False}
+                            page_data[idx] = {"page_number": idx + 1, "text": "", "image_count": 0, "is_scanned": False, "tables": []}
 
-            # Fill any None slots that as_completed may have skipped on early timeout
             for i in batch_indices:
                 if page_data[i] is None:
-                    logger.warning(f"Page {i + 1} was not extracted (timeout or error) — using empty fallback.")
-                    page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False}
+                    page_data[i] = {"page_number": i + 1, "text": "", "image_count": 0, "is_scanned": False, "tables": []}
 
             gc.collect()
 
-        # 3. Targeted OCR on scanned image-only pages (only if text is actually missing)
-        scanned_indices = [i for i, p in enumerate(page_data) if p and p["is_scanned"]]
-        ocr_limit = getattr(settings, "OCR_MAX_PAGES", 50)
+        # 3. Targeted Page-Level OCR ONLY on pages that genuinely lack native text
+        scanned_indices = [
+            i for i, p in enumerate(page_data)
+            if p and p.get("is_scanned") and len(p.get("text", "").strip()) < 20
+        ]
 
         if scanned_indices and settings.GEMINI_API_KEY:
+            ocr_limit = max(15, getattr(settings, "OCR_MAX_PAGES", 15))
             num_to_ocr = min(len(scanned_indices), ocr_limit)
-            if on_progress:
-                on_progress(
-                    "OCR",
-                    55,
-                    f"Running selective OCR on {num_to_ocr} image-only page(s)"
-                )
-            logger.info(f"Running selective OCR on {num_to_ocr} scanned page(s)...")
+            unprocessed_indices = scanned_indices[num_to_ocr:]
 
-            temp_doc = None
-            try:
-                if isinstance(pdf_source, bytes):
-                    temp_doc = fitz.open(stream=pdf_source, filetype="pdf")
-                else:
-                    temp_doc = fitz.open(pdf_source)
+            if num_to_ocr > 0:
+                if on_progress:
+                    on_progress(
+                        "OCR",
+                        55,
+                        f"Running selective OCR on {num_to_ocr} image-only page(s)"
+                    )
+                logger.info(f"Running selective parallel OCR on {num_to_ocr} scanned page(s)...")
 
                 import google.generativeai as genai
                 genai.configure(api_key=settings.GEMINI_API_KEY)
 
-                for idx in scanned_indices[:num_to_ocr]:
-                    if cancellation_token and getattr(cancellation_token, "is_set", lambda: False)():
-                        raise InterruptedError("Document processing was cancelled.")
-
+                def _ocr_single_page(idx: int) -> Optional[str]:
+                    temp_doc = None
                     try:
+                        if isinstance(pdf_source, bytes):
+                            temp_doc = fitz.open(stream=pdf_source, filetype="pdf")
+                        else:
+                            temp_doc = fitz.open(pdf_source)
                         pg = temp_doc[idx]
-                        pix = pg.get_pixmap(dpi=150)
-                        img_bytes = pix.tobytes("png")
-                        del pix  # Immediately free pixmap memory
+                        pix = pg.get_pixmap(dpi=120)
+                        img_bytes = pix.tobytes("jpeg")
+                        del pix
 
-                        image_part = {"mime_type": "image/png", "data": img_bytes}
+                        image_part = {"mime_type": "image/jpeg", "data": img_bytes}
                         prompt = (
                             "Transcribe all text, numbers, financial statements, balance sheet line items, "
                             "profit and loss figures, tables, and notes from this page image. "
@@ -330,16 +345,53 @@ class PDFExtractor:
                                 v_model = genai.GenerativeModel(model_name=m_name)
                                 res = v_model.generate_content([image_part, prompt])
                                 if res and res.text:
-                                    page_data[idx]["text"] = res.text.strip()
-                                    page_data[idx]["is_scanned"] = False
-                                    break
+                                    return res.text.strip()
                             except Exception:
                                 continue
+                        return None
                     except Exception as ocr_err:
                         logger.debug(f"Targeted OCR error on page {idx + 1}: {str(ocr_err)}")
-            finally:
-                if temp_doc is not None:
-                    temp_doc.close()
+                        return None
+                    finally:
+                        if temp_doc is not None:
+                            temp_doc.close()
+
+                ocr_workers = min(4, os.cpu_count() or 4)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=ocr_workers) as ocr_executor:
+                    ocr_futures = {
+                        ocr_executor.submit(_ocr_single_page, idx): idx
+                        for idx in scanned_indices[:num_to_ocr]
+                    }
+                    for fut in concurrent.futures.as_completed(ocr_futures, timeout=60.0):
+                        idx = ocr_futures[fut]
+                        try:
+                            ocr_text = fut.result()
+                            if ocr_text:
+                                page_data[idx]["text"] = ocr_text
+                                page_data[idx]["is_scanned"] = False
+                        except Exception as e:
+                            logger.debug(f"OCR future failed for page {idx + 1}: {str(e)}")
+
+            if unprocessed_indices:
+                unprocessed_page_nums = [idx + 1 for idx in unprocessed_indices]
+                logger.warning(
+                    f"OCR resource limit reached: {num_to_ocr} pages processed. "
+                    f"Pages {unprocessed_page_nums} remain unprocessed for OCR."
+                )
+                for idx in unprocessed_indices:
+                    if page_data[idx]:
+                        page_data[idx]["unprocessed_ocr"] = True
+
+        elif scanned_indices and not settings.GEMINI_API_KEY:
+            logger.warning(f"Detected {len(scanned_indices)} scanned image pages, but GEMINI_API_KEY is not configured for OCR.")
+            for idx in scanned_indices:
+                if page_data[idx]:
+                    page_data[idx]["unprocessed_ocr"] = True
+        else:
+            logger.info(
+                f"PDF pre-flight confirmed text_native ({total_pages} pages, avg {avg_chars:.0f} chars/page). "
+                "Skipping image OCR — native text extracted directly."
+            )
 
         # 4. Build ExtractedPage models
         extracted_pages: List[ExtractedPage] = []
@@ -347,7 +399,7 @@ class PDFExtractor:
             if not pd:
                 continue
             txt = pd["text"]
-            has_tables = "\t" in txt or "   " in txt or "|" in txt
+            has_tables = "\t" in txt or "   " in txt or "|" in txt or bool(pd.get("tables"))
             extracted_pages.append(
                 ExtractedPage(
                     page_number=pd["page_number"],
@@ -355,8 +407,9 @@ class PDFExtractor:
                     char_count=len(txt),
                     image_count=pd["image_count"],
                     is_empty=not txt.strip(),
-                    is_scanned=pd["is_scanned"],
+                    is_scanned=pd.get("is_scanned", False),
                     has_tables=has_tables,
+                    unprocessed_ocr=pd.get("unprocessed_ocr", False),
                 )
             )
 

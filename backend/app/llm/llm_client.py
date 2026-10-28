@@ -143,11 +143,12 @@ class GeminiLLMClient:
             )
 
             candidates_to_try = [
-                "gemini-2.0-flash",
-                "gemini-1.5-flash",
-                "gemini-2.0-flash-lite",
-                "gemini-1.5-pro",
-                "gemini-1.5-flash-8b",
+                "gemini-2.5-flash",
+                "gemini-3.8-flash",
+                "gemini-3.5-flash",
+                "gemini-flash-latest",
+                "gemini-2.5-pro",
+                "gemini-3.5-flash-lite",
             ]
             if hasattr(self, "_working_model") and self._working_model in candidates_to_try:
                 candidates_to_try.remove(self._working_model)
@@ -431,6 +432,66 @@ class GeminiLLMClient:
         except Exception as oa_err:
             logger.warning(f"OpenAI provider note: {str(oa_err)}")
         return None
+
+    def generate_stream(
+        self,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        temperature: float = 0.15,
+        max_tokens: int = 2048,
+    ):
+        """
+        Streams generated token chunks for ultra-low Time-To-First-Token (< 350ms).
+        Tries Groq streaming first (500+ tok/sec), falls back to chunking full response.
+        """
+        if self.groq_api_key:
+            try:
+                from groq import Groq
+                client = Groq(api_key=self.groq_api_key.strip())
+                messages = []
+                if system_instruction:
+                    messages.append({"role": "system", "content": system_instruction})
+                if conversation_history:
+                    for m in conversation_history:
+                        r = m.get("role") or m.get("sender") or "user"
+                        messages.append({"role": "assistant" if r in ("assistant", "ai") else "user", "content": m.get("content") or m.get("text") or ""})
+                messages.append({"role": "user", "content": prompt})
+
+                for groq_model in ["llama-3.3-70b-versatile", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"]:
+                    try:
+                        stream = client.chat.completions.create(
+                            model=groq_model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            stream=True
+                        )
+                        had_chunks = False
+                        for chunk in stream:
+                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                                text_piece = chunk.choices[0].delta.content
+                                had_chunks = True
+                                yield text_piece
+                        if had_chunks:
+                            return
+                    except Exception:
+                        continue
+            except Exception as stream_err:
+                logger.debug(f"Groq streaming note: {str(stream_err)}")
+
+        # Fallback to standard generate and yield smooth words
+        full_text = self.generate(
+            prompt=prompt,
+            system_instruction=system_instruction,
+            conversation_history=conversation_history,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        if full_text:
+            words = full_text.split(" ")
+            for i, w in enumerate(words):
+                yield w + (" " if i < len(words) - 1 else "")
 
     def invoke(self, prompt: str) -> Any:
         """Backward-compatible invoke() wrapper."""

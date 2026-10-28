@@ -2,16 +2,17 @@ import re
 from typing import List
 
 _RE_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-_RE_SPACES = re.compile(r"[ \t]+")
+_RE_MULTIPLE_SPACES = re.compile(r"[ ]{2,}")
 _RE_NEWLINES = re.compile(r"\n{3,}")
 
 
 class TextCleaner:
     """
-    High-performance cleaner for financial PDF documents.
+    High-performance cleaner for financial documents.
     Normalizes whitespace and removes control characters while strictly preserving:
     - Monetary symbols ($, €, £, ¥, ₹)
     - Percentages (e.g. 46.2%, +12.9%)
+    - Tab delimiters (\t) for tabular data alignment
     - Financial figures and negative indicators (e.g. $383,285, (1,234.50), -15.4%)
     - Dates and period headers (e.g. September 28, 2024, Q3 FY24)
     - Section headings and line breaks relevant to financial statement tables
@@ -28,15 +29,15 @@ class TextCleaner:
         # 2. Strip non-printable ASCII control characters (preserving \n and \t)
         cleaned = _RE_CONTROL_CHARS.sub("", cleaned)
 
-        # 3. Replace multiple horizontal spaces/tabs on a single line with a single space
-        cleaned = _RE_SPACES.sub(" ", cleaned)
+        # 3. Collapse multiple spaces while preserving tab delimiters
+        cleaned = _RE_MULTIPLE_SPACES.sub(" ", cleaned)
 
         # 4. Normalize excessive newlines (3 or more consecutive newlines reduced to 2)
         cleaned = _RE_NEWLINES.sub("\n\n", cleaned)
 
-        # 5. Trim whitespace per line while preserving nonempty lines
-        lines = [line.strip() for line in cleaned.split("\n")]
-        cleaned = "\n".join(line for line in lines if line)
+        # 5. Trim whitespace per line while preserving nonempty lines and tab-separated columns
+        lines = [line.strip(" ") for line in cleaned.split("\n")]
+        cleaned = "\n".join(line for line in lines if line.strip())
 
         return cleaned.strip()
 

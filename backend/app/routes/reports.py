@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Any
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks
 from ..api.deps import get_current_user
@@ -47,8 +48,9 @@ async def upload_report(
     cleaned_filename = sanitize_filename(file.filename)
     user_id = current_user["uid"]
 
-    # Process Document and index into ChromaDB
-    report = report_service.process_and_index_document(
+    # Process Document and index into ChromaDB non-blockingly
+    report = await asyncio.to_thread(
+        report_service.process_and_index_document,
         file_bytes=file_bytes,
         filename=cleaned_filename,
         user_id=user_id,
@@ -73,7 +75,7 @@ async def list_reports(
 ):
     """Retrieves all reports uploaded by the authenticated user."""
     user_id = current_user["uid"]
-    reports = report_service.list_reports(user_id=user_id)
+    reports = await asyncio.to_thread(report_service.list_reports, user_id=user_id)
     items = [
         ReportListItem(
             id=r.id,
@@ -97,7 +99,7 @@ async def get_report_detail(
 ):
     """Fetches full metadata and status for a specific report."""
     user_id = current_user["uid"]
-    report = report_service.get_report(report_id=report_id, user_id=user_id)
+    report = await asyncio.to_thread(report_service.get_report, report_id=report_id, user_id=user_id)
     if not report:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -130,7 +132,7 @@ async def delete_report(
 ):
     """Deletes a report, vector chunks, and associated metadata."""
     user_id = current_user["uid"]
-    success = report_service.delete_report(report_id=report_id, user_id=user_id)
+    success = await asyncio.to_thread(report_service.delete_report, report_id=report_id, user_id=user_id)
     return ApiResponse(
         success=success,
         message=f"Report '{report_id}' and all associated vector embeddings deleted successfully."

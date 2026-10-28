@@ -118,6 +118,10 @@ class AICacheService:
                     return item["data"]
             except Exception as e:
                 logger.warning(f"Error reading disk cache '{disk_file}': {str(e)}")
+                try:
+                    os.remove(disk_file)
+                except Exception:
+                    pass
 
         # 3. Check Firestore Database
         if self.firestore_db:
@@ -130,7 +134,7 @@ class AICacheService:
                         # Write to disk cache for fast future reads
                         try:
                             with open(disk_file, "w", encoding="utf-8") as f:
-                                json.dump(item, f, indent=2)
+                                json.dump(item, f, indent=2, default=str)
                         except Exception:
                             pass
 
@@ -187,7 +191,7 @@ class AICacheService:
         disk_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
         try:
             with open(disk_file, "w", encoding="utf-8") as f:
-                json.dump(record, f, indent=2)
+                json.dump(record, f, indent=2, default=str)
         except Exception as e:
             logger.warning(f"Failed to write disk cache file '{disk_file}': {str(e)}")
 

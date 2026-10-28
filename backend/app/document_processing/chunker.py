@@ -29,7 +29,10 @@ class DocumentChunk:
 def _fast_split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[str]:
     """
     Ultra-fast high-performance sliding-window text chunker for financial text.
-    Preserves paragraphs, tables, and sentence boundaries without slow recursion.
+    Preserves paragraphs, tables, and sentence boundaries.
+    CRITICAL GROUNDING: When splitting Markdown tables, every sub-chunk preserves the
+    table header row so that numeric rows are never severed from their column titles,
+    fiscal periods, or currencies.
     """
     if not text:
         return []
@@ -39,7 +42,6 @@ def _fast_split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200
         return [text]
 
     chunks = []
-    # Split text primarily into paragraph blocks
     paragraphs = text.split("\n\n")
     current_chunk = []
     current_len = 0
@@ -50,30 +52,61 @@ def _fast_split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200
             continue
         p_len = len(p)
 
-        # If a single paragraph/table is larger than chunk_size, split by lines
+        # If a single paragraph/table is larger than chunk_size, split intelligently
         if p_len > chunk_size:
             if current_chunk:
                 chunks.append("\n\n".join(current_chunk))
                 current_chunk = []
                 current_len = 0
 
-            lines = p.split("\n")
-            sub_chunk = []
-            sub_len = 0
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                if sub_len + len(line) + 1 > chunk_size and sub_chunk:
+            lines = [l.strip() for l in p.split("\n") if l.strip()]
+
+            # Detect Markdown table structure
+            is_table = False
+            header_lines = []
+            data_start_idx = 0
+
+            if len(lines) >= 2 and "|" in lines[0] and "---" in lines[1]:
+                is_table = True
+                header_lines = [lines[0], lines[1]]
+                data_start_idx = 2
+            elif len(lines) >= 3 and "|" in lines[1] and "---" in lines[2]:
+                is_table = True
+                header_lines = [lines[0], lines[1], lines[2]]
+                data_start_idx = 3
+
+            if is_table and header_lines:
+                header_prefix = "\n".join(header_lines)
+                header_len = len(header_prefix) + 1
+                sub_chunk = [header_prefix]
+                sub_len = header_len
+
+                for line in lines[data_start_idx:]:
+                    if not line:
+                        continue
+                    if sub_len + len(line) + 1 > chunk_size and len(sub_chunk) > 1:
+                        chunks.append("\n".join(sub_chunk))
+                        sub_chunk = [header_prefix, line]
+                        sub_len = header_len + len(line) + 1
+                    else:
+                        sub_chunk.append(line)
+                        sub_len += len(line) + 1
+                if len(sub_chunk) > 1:
                     chunks.append("\n".join(sub_chunk))
-                    overlap_line = sub_chunk[-1] if len(sub_chunk[-1]) < chunk_overlap else ""
-                    sub_chunk = [overlap_line, line] if overlap_line else [line]
-                    sub_len = sum(len(x) + 1 for x in sub_chunk)
-                else:
-                    sub_chunk.append(line)
-                    sub_len += len(line) + 1
-            if sub_chunk:
-                chunks.append("\n".join(sub_chunk))
+            else:
+                sub_chunk = []
+                sub_len = 0
+                for line in lines:
+                    if sub_len + len(line) + 1 > chunk_size and sub_chunk:
+                        chunks.append("\n".join(sub_chunk))
+                        overlap_line = sub_chunk[-1] if len(sub_chunk[-1]) < chunk_overlap else ""
+                        sub_chunk = [overlap_line, line] if overlap_line else [line]
+                        sub_len = sum(len(x) + 1 for x in sub_chunk)
+                    else:
+                        sub_chunk.append(line)
+                        sub_len += len(line) + 1
+                if sub_chunk:
+                    chunks.append("\n".join(sub_chunk))
 
         elif current_len + p_len + 2 <= chunk_size:
             current_chunk.append(p)
@@ -143,7 +176,7 @@ class DocumentChunker:
 
                 # Check if block is a structured markdown table
                 if b.block_type == "table":
-                    # Tables get dedicated or prioritized chunking to avoid cutting rows
+                    # Tables get dedicated or prioritized chunking with header preservation
                     table_chunks = _fast_split_text(b_content, chunk_size=self.chunk_size * 2, chunk_overlap=self.chunk_overlap)
                     for t_chunk in table_chunks:
                         chunk_idx += 1

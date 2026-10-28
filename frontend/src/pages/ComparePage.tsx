@@ -23,7 +23,11 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { API_BASE_URL } from '../utils/constants';
+import apiClient from '../services/api';
 import RichMarkdownRenderer from '../components/common/RichMarkdownRenderer';
+
+// In-memory cache for comparisons across navigation tabs
+const compareMemoryCache = new Map<string, any>();
 
 interface ComparisonData {
   document_a: {
@@ -70,41 +74,47 @@ export const ComparePage: React.FC = () => {
     }
   }, [reports, docAId, docBId]);
 
-  const handleRunComparison = async () => {
+  const handleRunComparison = async (forceRefresh = false) => {
     if (!docAId || !docBId) {
       setErrorMsg('Please select two reports to compare.');
       return;
     }
+
+    const cacheKey = `${docAId}__${docBId}`;
+    if (!forceRefresh && compareMemoryCache.has(cacheKey)) {
+      setComparisonData(compareMemoryCache.get(cacheKey));
+      setErrorMsg(null);
+      return;
+    }
+
     setIsLoading(true);
     setErrorMsg(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/compare`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          document_a_id: docAId,
-          document_b_id: docBId,
-          user_id: 'dev_user_123',
-        }),
+      const response = await apiClient.post<ComparisonData>('/compare', {
+        document_a_id: docAId,
+        document_b_id: docBId,
+        force_refresh: forceRefresh,
       });
 
-      if (!response.ok) {
-        throw new Error(`Comparison API returned HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = response.data;
+      compareMemoryCache.set(cacheKey, data);
       setComparisonData(data);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to compare reports.');
+      setErrorMsg(err.response?.data?.detail || err.message || 'Failed to compare reports.');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (docAId && docBId && docAId !== docBId && !comparisonData) {
-      handleRunComparison();
+    if (docAId && docBId && docAId !== docBId) {
+      const cacheKey = `${docAId}__${docBId}`;
+      if (compareMemoryCache.has(cacheKey)) {
+        setComparisonData(compareMemoryCache.get(cacheKey));
+      } else if (!comparisonData) {
+        handleRunComparison(false);
+      }
     }
   }, [docAId, docBId]);
 
@@ -133,7 +143,7 @@ export const ComparePage: React.FC = () => {
         </div>
 
         <button
-          onClick={handleRunComparison}
+          onClick={() => handleRunComparison(true)}
           disabled={isLoading}
           className="px-5 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50 self-start md:self-auto"
         >

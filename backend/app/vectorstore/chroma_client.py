@@ -175,3 +175,16 @@ class ChromaVectorService:
             logger.info(f"Deleted vector chunks for report_id: {report_id}")
         except Exception as e:
             logger.warning(f"Error deleting chunks for report_id {report_id}: {str(e)}")
+
+    def delete_report_embeddings(self, report_id: str) -> None:
+        """Alias for delete_report_chunks for cross-service compatibility."""
+        self.delete_report_chunks(report_id)
+
+    def delete_document(self, document_id: str, user_id: Optional[str] = None) -> bool:
+        """Deletes chunks for document_id."""
+        try:
+            self.delete_report_chunks(document_id)
+            return True
+        except Exception:
+            return False
+

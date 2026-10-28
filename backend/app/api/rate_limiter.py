@@ -49,9 +49,9 @@ class UserRateLimiter:
             self._requests[identifier].append(now)
 
 
-# Global instances for different operation tiers
-ai_rate_limiter = UserRateLimiter(max_requests=15, window_seconds=60)
-upload_rate_limiter = UserRateLimiter(max_requests=10, window_seconds=60)
+# Global instances for different operation tiers (generous limits to allow seamless navigation across sections)
+ai_rate_limiter = UserRateLimiter(max_requests=120, window_seconds=60)
+upload_rate_limiter = UserRateLimiter(max_requests=30, window_seconds=60)
 
 
 async def check_ai_rate_limit(

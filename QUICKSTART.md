@@ -20,16 +20,20 @@ Open **two separate terminal windows** on your machine.
 
 ### Terminal 1: Backend Server (FastAPI)
 
-#### Why this command?
-We use `python -m uvicorn app.main:app` without `--reload` on Windows to prevent sub-process permission issues while maintaining fast multi-threaded execution.
+#### Why `python -m uvicorn` instead of `uvicorn`?
+> ⚠️ **Windows Application Control Notice**: On Windows, running `uvicorn.exe` directly gets blocked with `"An Application Control policy has blocked this file"`. Calling `python -m uvicorn` runs directly through the trusted Python interpreter, bypassing this block cleanly and reliably.
 
 #### 🪟 Windows (PowerShell / Command Prompt)
-```powershell
-# 1. Go to backend folder
-cd backend
 
-# 2. Start the FastAPI server using the virtual environment
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+**Option A (Recommended — Direct 1-Click / Copy-Paste):**
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Option B (If your `.venv` is already activated in terminal):**
+```powershell
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 #### 🍎 macOS / 🐧 Linux
@@ -41,7 +45,7 @@ cd backend
 source .venv/bin/activate
 
 # 3. Start the FastAPI server
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 *  **Backend API URL**: `http://localhost:8000`

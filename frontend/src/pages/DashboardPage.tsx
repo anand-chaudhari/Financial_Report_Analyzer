@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useReportContext } from '../context/ReportContext';
@@ -15,37 +15,67 @@ import {
   Sparkles,
   Search,
   BookOpen,
+  AlertCircle,
 } from 'lucide-react';
 import { FinancialOverviewSection } from '../components/financial/FinancialOverviewSection';
+import { ConfirmModal } from '../components/common/ConfirmModal';
+import { RenameModal } from '../components/common/RenameModal';
+import { ReportItem } from '../types/report';
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { reports, deleteReport } = useReportContext();
+  const { reports, deleteReport, renameReport } = useReportContext();
 
   const [selectedFilter, setSelectedFilter] = useState<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [reportToDelete, setReportToDelete] = useState<ReportItem | null>(null);
+  const [reportToRename, setReportToRename] = useState<ReportItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const rawName = user?.displayName || user?.email?.split('@')[0] || 'Analyst';
   const userName = toTitleCase(rawName);
 
-  const filteredReports = reports.filter((r) => {
-    const type = r.filingType || '10-K';
-    const matchesFilter = selectedFilter === 'All' || type === selectedFilter;
-    const company = r.companyName || r.company_name || r.filename;
-    const ticker = r.ticker || '';
-    const name = r.fileName || r.filename;
-    const matchesSearch =
-      company.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticker.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
+  const handleConfirmDelete = useCallback(async () => {
+    if (!reportToDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteReport(reportToDelete.id);
+      setReportToDelete(null);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to delete report. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [reportToDelete, deleteReport]);
 
-  const totalPagesCount = reports.reduce((acc, r) => acc + (r.pageCount || r.total_pages || 0), 0);
+  const filteredReports = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return reports.filter((r) => {
+      const type = r.filingType || '10-K';
+      const matchesFilter = selectedFilter === 'All' || type === selectedFilter;
+      if (!matchesFilter) return false;
+      if (!q) return true;
+      const company = (r.companyName || r.company_name || r.filename || '').toLowerCase();
+      const ticker = (r.ticker || '').toLowerCase();
+      const name = (r.fileName || r.filename || '').toLowerCase();
+      return company.includes(q) || ticker.includes(q) || name.includes(q);
+    });
+  }, [reports, selectedFilter, searchQuery]);
+
+  const totalPagesCount = useMemo(() => {
+    return reports.reduce((acc, r) => acc + (r.pageCount || r.total_pages || 0), 0);
+  }, [reports]);
+
+  const processedReportsCount = useMemo(() => {
+    return reports.filter((r) => r.status === 'completed' || r.status === 'ready' || r.status === 'uploaded').length;
+  }, [reports]);
+
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const activeReportId = selectedReportId || reports[0]?.id || '';
-  const activeReport = reports.find((r) => r.id === activeReportId);
+  const activeReport = useMemo(() => reports.find((r) => r.id === activeReportId), [reports, activeReportId]);
 
   return (
     <div className="space-y-8 animate-fade-in w-full min-w-0">
@@ -93,7 +123,7 @@ export const DashboardPage: React.FC = () => {
         />
         <StatCard
           title="Processed Reports"
-          value={reports.filter((r) => r.status === 'completed' || r.status === 'ready' || r.status === 'uploaded').length.toString()}
+          value={processedReportsCount.toString()}
           subtitle="100% Fully Indexed"
           icon={CheckCircle2}
           color="blue"
@@ -177,6 +207,21 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
+        {deleteError && (
+          <div className="mb-4 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 flex items-center justify-between text-rose-700 dark:text-rose-400 text-xs animate-shake">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{deleteError}</span>
+            </div>
+            <button
+              onClick={() => setDeleteError(null)}
+              className="text-xs font-bold hover:underline cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Reports Grid */}
         {filteredReports.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -185,7 +230,8 @@ export const DashboardPage: React.FC = () => {
                 key={report.id}
                 report={report}
                 onAnalyze={() => navigate(`/analyst?doc=${report.id}`)}
-                onDelete={() => deleteReport(report.id)}
+                onDelete={() => setReportToDelete(report)}
+                onRename={() => setReportToRename(report)}
               />
             ))}
           </div>
@@ -199,6 +245,33 @@ export const DashboardPage: React.FC = () => {
           />
         )}
       </div>
+
+      {/* Confirmation Modal for Document Deletion */}
+      <ConfirmModal
+        isOpen={!!reportToDelete}
+        title="Delete Financial Report"
+        description={`Are you sure you want to delete "${reportToDelete?.companyName || reportToDelete?.fileName || 'this filing'}"? This action permanently removes stored files, vector embeddings, and all generated AI analysis.`}
+        confirmLabel="Delete Report"
+        cancelLabel="Cancel"
+        isDanger
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => {
+          if (!isDeleting) setReportToDelete(null);
+        }}
+      />
+
+      {/* Modal for Document Renaming */}
+      <RenameModal
+        isOpen={!!reportToRename}
+        initialName={reportToRename?.companyName || reportToRename?.fileName || ''}
+        onConfirm={async (newName) => {
+          if (reportToRename) {
+            await renameReport(reportToRename.id, newName);
+          }
+        }}
+        onClose={() => setReportToRename(null)}
+      />
     </div>
   );
 };

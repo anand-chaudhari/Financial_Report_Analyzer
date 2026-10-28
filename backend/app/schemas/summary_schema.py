@@ -1,18 +1,39 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SummarySectionItem(BaseModel):
-    text: str
+    text: str = ""
     pages: List[int] = Field(default_factory=list)
     value: Optional[str] = None
 
+    @field_validator("text", mode="before")
+    @classmethod
+    def sanitize_text(cls, v):
+        if v is None:
+            return ""
+        return str(v)
+
 
 class KpiCardItem(BaseModel):
-    label: str
-    value: str
+    label: str = "Financial Metric"
+    value: Optional[str] = "Not disclosed"
     change: Optional[str] = None
     icon: Optional[str] = None
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def sanitize_value(cls, v):
+        if v is None or str(v).strip().lower() in ("none", "null", ""):
+            return "Not disclosed"
+        return str(v).strip()
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def sanitize_label(cls, v):
+        if not v or str(v).strip().lower() in ("none", "null", ""):
+            return "Financial Metric"
+        return str(v).strip()
 
 
 class DocumentSummaryResponse(BaseModel):

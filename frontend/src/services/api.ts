@@ -11,9 +11,15 @@ const apiClient: AxiosInstance = axios.create({
   timeout: 180000, // 3 min timeout for RAG processing & vector embeddings
 });
 
-// Request Interceptor: Attach fresh Firebase Bearer Token
+// Request Interceptor: Attach fresh Firebase Bearer Token & handle FormData
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    // If request payload is FormData, remove manual Content-Type so the browser/runtime
+    // automatically injects 'multipart/form-data; boundary=----WebKitFormBoundary...'
+    if (config.data instanceof FormData && config.headers) {
+      delete config.headers['Content-Type'];
+    }
+
     try {
       const user = auth.currentUser;
       if (user) {

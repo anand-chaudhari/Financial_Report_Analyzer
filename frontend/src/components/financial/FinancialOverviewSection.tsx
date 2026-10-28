@@ -28,12 +28,12 @@ export const FinancialOverviewSection: React.FC<FinancialOverviewSectionProps> =
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchOverview = async () => {
+  const fetchOverview = async (force: boolean = false) => {
     if (!reportId) return;
     setLoading(true);
     setError(null);
     try {
-      const overview = await financialService.getFinancialOverview(reportId);
+      const overview = await financialService.getFinancialOverview(reportId, force);
       setData(overview);
     } catch (err: any) {
       console.warn('Could not fetch financial overview:', err);
@@ -69,7 +69,7 @@ export const FinancialOverviewSection: React.FC<FinancialOverviewSectionProps> =
           </div>
 
           <button
-            onClick={fetchOverview}
+            onClick={() => fetchOverview(true)}
             disabled={loading}
             className="self-start sm:self-auto px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
             title="Re-extract financial overview"

@@ -12,15 +12,17 @@ import {
   Trash2,
   AlertCircle,
   Sparkles,
+  Edit3,
 } from 'lucide-react';
 
 interface ReportCardProps {
   report: ReportItem;
   onAnalyze?: () => void;
   onDelete?: () => void;
+  onRename?: () => void;
 }
 
-export const ReportCard: React.FC<ReportCardProps> = ({ report, onAnalyze, onDelete }) => {
+export const ReportCard: React.FC<ReportCardProps> = React.memo(({ report, onAnalyze, onDelete, onRename }) => {
   const navigate = useNavigate();
 
   const company = report.companyName || report.company_name || report.filename || 'Financial Report';
@@ -117,6 +119,32 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report, onAnalyze, onDel
           <span>Period: <strong className="text-slate-600 dark:text-slate-300">{report.financialYear || report.fiscal_period || 'FY2024'}</strong></span>
           <span>Uploaded: {formatDate(uploadedDate)}</span>
         </div>
+
+        {/* Real-time Processing Progress Bar */}
+        {report.status === 'processing' && (
+          <div className="mt-3 p-2.5 rounded-xl bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/20 space-y-1.5 animate-fade-in">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 truncate">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping flex-shrink-0" />
+                <span className="truncate">{report.currentStage || 'Processing Pipeline'}</span>
+              </span>
+              <span className="font-mono font-bold text-amber-600 dark:text-amber-400 flex-shrink-0">
+                {report.progressPercent || 5}%
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden relative">
+              <div
+                className="bg-gradient-to-r from-amber-500 via-teal-400 to-emerald-500 h-1.5 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${Math.max(5, Math.min(100, report.progressPercent || 5))}%` }}
+              />
+            </div>
+            {report.stageMessage && (
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate font-medium">
+                {report.stageMessage}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Footer Info & Action buttons */}
@@ -132,6 +160,15 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report, onAnalyze, onDel
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {onRename && (
+            <button
+              onClick={onRename}
+              title="Rename Report"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors cursor-pointer"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
           {onDelete && (
             <button
               onClick={onDelete}
@@ -160,4 +197,4 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report, onAnalyze, onDel
       </div>
     </div>
   );
-};
+});

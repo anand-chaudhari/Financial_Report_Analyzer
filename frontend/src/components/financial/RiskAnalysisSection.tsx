@@ -34,12 +34,12 @@ export const RiskAnalysisSection: React.FC<RiskAnalysisSectionProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'REPORTED' | 'INDICATOR'>('ALL');
 
-  const fetchRisks = async () => {
+  const fetchRisks = async (force: boolean = false) => {
     if (!reportId) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await financialService.getRiskAnalysis(reportId);
+      const res = await financialService.getRiskAnalysis(reportId, force);
       setData(res);
     } catch (err: any) {
       console.warn('Could not fetch risk analysis:', err);
@@ -133,7 +133,7 @@ export const RiskAnalysisSection: React.FC<RiskAnalysisSectionProps> = ({
             </span>
           )}
           <button
-            onClick={fetchRisks}
+            onClick={() => fetchRisks(true)}
             disabled={loading}
             className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
             title="Re-analyze financial risks"

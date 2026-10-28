@@ -2,6 +2,7 @@
 FinSight AI - Comparison Router.
 Provides endpoints for multi-document financial comparisons and variance analytics.
 """
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -23,7 +24,7 @@ class CompareRequest(BaseModel):
 
 
 @router.post("", dependencies=[Depends(check_ai_rate_limit)])
-def compare_filings(
+async def compare_filings(
     req: CompareRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
     comp_service: ComparisonService = Depends(get_comparison_service),
@@ -37,9 +38,9 @@ def compare_filings(
 
     user_id = current_user["uid"]
 
-    # Verify user ownership of both documents
-    doc_a = doc_service.get_document(req.document_a_id, user_id=user_id)
-    doc_b = doc_service.get_document(req.document_b_id, user_id=user_id)
+    # Verify user ownership of both documents non-blockingly
+    doc_a = await asyncio.to_thread(doc_service.get_document, req.document_a_id, user_id=user_id)
+    doc_b = await asyncio.to_thread(doc_service.get_document, req.document_b_id, user_id=user_id)
 
     if not doc_a:
         raise HTTPException(
@@ -54,7 +55,8 @@ def compare_filings(
         )
 
     try:
-        result = comp_service.compare_documents(
+        result = await asyncio.to_thread(
+            comp_service.compare_documents,
             doc_a_id=req.document_a_id,
             doc_b_id=req.document_b_id,
             user_id=user_id,

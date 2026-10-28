@@ -1,7 +1,9 @@
 import os
+import hashlib
 import uuid
 import asyncio
 from typing import Dict, Any, List
+from pydantic import BaseModel
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from ..api.deps import get_current_user
 from ..api.rate_limiter import check_ai_rate_limit, check_upload_rate_limit
@@ -62,6 +64,7 @@ async def upload_document(
 
     # 1. Stream file chunks to disk (Zero memory overhead for 200MB PDFs)
     try:
+        hasher = hashlib.sha256()
         total_bytes = 0
         with open(temp_file_path, "wb") as f_out:
             while True:
@@ -69,7 +72,9 @@ async def upload_document(
                 if not chunk:
                     break
                 f_out.write(chunk)
+                hasher.update(chunk)
                 total_bytes += len(chunk)
+        computed_hash = hasher.hexdigest()
     except Exception as e:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
@@ -108,17 +113,19 @@ async def upload_document(
     try:
         from ..services.background_worker import submit_background_processing
 
-        doc_model, is_completed = document_service.prepare_upload_record(
+        doc_model, is_completed = await asyncio.to_thread(
+            document_service.prepare_upload_record,
             temp_file_path=temp_file_path,
             filename=cleaned_filename,
             user_id=user_id,
+            precomputed_hash=computed_hash,
         )
 
         # Offload 600+ page heavy processing to background worker pool if not already completed/reused
         if not is_completed:
             submit_background_processing(
-                doc_model.documentId,
-                document_service.process_document_background,
+                job_id=doc_model.documentId,
+                task_fn=document_service.process_document_background,
                 document_id=doc_model.documentId,
                 user_id=user_id,
             )
@@ -183,7 +190,7 @@ async def list_documents(
 ):
     """Lists all financial documents uploaded by the authenticated user."""
     user_id = current_user["uid"]
-    docs = document_service.list_user_documents(user_id=user_id)
+    docs = await asyncio.to_thread(document_service.list_user_documents, user_id=user_id)
 
     items = [
         DocumentMetadata(
@@ -220,7 +227,7 @@ async def get_document_status(
 ):
     """Retrieves live processing stage and progress for a document."""
     user_id = current_user["uid"]
-    doc = document_service.get_document(document_id=document_id, user_id=user_id)
+    doc = await asyncio.to_thread(document_service.get_document, document_id=document_id, user_id=user_id)
 
     if not doc:
         raise HTTPException(
@@ -260,7 +267,7 @@ async def get_document(
 ):
     """Retrieves metadata and processing status for a single document."""
     user_id = current_user["uid"]
-    doc = document_service.get_document(document_id=document_id, user_id=user_id)
+    doc = await asyncio.to_thread(document_service.get_document, document_id=document_id, user_id=user_id)
 
     if not doc:
         raise HTTPException(
@@ -465,3 +472,83 @@ async def delete_document(
         "success": success,
         "message": f"Document '{document_id}' deleted successfully."
     }
+
+
+class RenameDocumentRequest(BaseModel):
+    new_name: str
+
+
+@router.patch("/{document_id}/rename")
+async def rename_document(
+    document_id: str,
+    payload: RenameDocumentRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Renames an uploaded document's display/company name or file name."""
+    user_id = current_user["uid"]
+    updated_doc = document_service.rename_document(
+        document_id=document_id,
+        user_id=user_id,
+        new_name=payload.new_name
+    )
+    if not updated_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found."
+        )
+    return {
+        "success": True,
+        "message": f"Document '{document_id}' renamed successfully.",
+        "data": updated_doc.to_dict()
+    }
+
+@router.post("/{document_id}/retry", response_model=DocumentUploadResponse)
+async def retry_document_processing(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Safely retries processing for a failed or interrupted document."""
+    user_id = current_user["uid"]
+    doc = await asyncio.to_thread(document_service.get_document, document_id=document_id, user_id=user_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found."
+        )
+
+    from ..services.background_worker import submit_background_processing
+    doc.status = "processing"
+    doc.currentStage = "Queued"
+    doc.stageMessage = "Processing retry queued in background"
+    doc.progressPercent = 5
+    document_service._save_to_firestore(doc)
+
+    submit_background_processing(
+        job_id=document_id,
+        task_fn=document_service.process_document_background,
+        document_id=document_id,
+        user_id=user_id,
+    )
+
+    metadata = DocumentMetadata(
+        documentId=doc.documentId,
+        userId=doc.userId,
+        fileName=doc.fileName,
+        companyName=doc.companyName,
+        financialYear=doc.financialYear,
+        pageCount=doc.pageCount,
+        status=doc.status,
+        currentStage=doc.currentStage,
+        stageMessage=doc.stageMessage,
+        progressPercent=doc.progressPercent,
+        storageUrl=doc.storageUrl,
+        uploadedAt=doc.uploadedAt,
+        processedAt=doc.processedAt,
+        fileSize=doc.fileSize,
+        errorMessage=doc.errorMessage,
+    )
+    return DocumentUploadResponse(
+        success=True,
+        message="Processing retry queued successfully.",
+        data=metadata
+    )

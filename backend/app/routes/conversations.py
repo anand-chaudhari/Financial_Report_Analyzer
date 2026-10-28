@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from ..api.deps import get_current_user
@@ -28,7 +29,7 @@ async def list_conversations(
     Never allows one user to read another user's conversations.
     """
     user_id = current_user["uid"]
-    convs = conv_service.list_user_conversations(user_id=user_id, document_id=document_id)
+    convs = await asyncio.to_thread(conv_service.list_user_conversations, user_id=user_id, document_id=document_id)
 
     items = []
     for c in convs:
@@ -60,7 +61,8 @@ async def create_conversation(
     Creates a new conversation thread for the authenticated user.
     """
     user_id = current_user["uid"]
-    conv = conv_service.create_conversation(
+    conv = await asyncio.to_thread(
+        conv_service.create_conversation,
         user_id=user_id,
         document_id=request.documentId,
         title=request.title
@@ -91,7 +93,7 @@ async def get_conversation(
     Enforces strict user ownership: Throws 403 / 404 if user does not own the conversation.
     """
     user_id = current_user["uid"]
-    conv = conv_service.get_conversation(conversation_id=conversation_id, user_id=user_id)
+    conv = await asyncio.to_thread(conv_service.get_conversation, conversation_id=conversation_id, user_id=user_id)
 
     if not conv:
         raise HTTPException(
@@ -136,7 +138,8 @@ async def rename_conversation(
     Renames a conversation title. Enforces user ownership.
     """
     user_id = current_user["uid"]
-    success = conv_service.update_conversation_title(
+    success = await asyncio.to_thread(
+        conv_service.update_conversation_title,
         conversation_id=conversation_id,
         user_id=user_id,
         title=request.title
@@ -148,7 +151,7 @@ async def rename_conversation(
             detail=f"Conversation '{conversation_id}' not found or access denied."
         )
 
-    conv = conv_service.get_conversation(conversation_id=conversation_id, user_id=user_id)
+    conv = await asyncio.to_thread(conv_service.get_conversation, conversation_id=conversation_id, user_id=user_id)
     return ApiResponse(
         success=True,
         message="Conversation title updated successfully.",
@@ -173,7 +176,7 @@ async def delete_conversation(
     Deletes a conversation and its messages. Enforces user ownership.
     """
     user_id = current_user["uid"]
-    success = conv_service.delete_conversation(conversation_id=conversation_id, user_id=user_id)
+    success = await asyncio.to_thread(conv_service.delete_conversation, conversation_id=conversation_id, user_id=user_id)
 
     if not success:
         raise HTTPException(

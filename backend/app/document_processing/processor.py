@@ -45,7 +45,7 @@ class DocumentProcessor:
     Main orchestrator pipeline class for Multi-Format Financial Document Processing:
     Supports PDF, XLSX, XLS, CSV, DOCX, TXT, MD, and JSON.
     Extracts structured content, preserves financial tables/metadata, normalizes to ExtractedDocument,
-    and produces high-precision semantic vector chunks.
+    and produces high-precision semantic vector chunks without holding duplicate full-file byte buffers.
     """
 
     def __init__(
@@ -92,10 +92,9 @@ class DocumentProcessor:
 
         logger.info(f"DocumentProcessor: Processing '{file_name}' as format '{format_type.upper()}' (ID: {document_id}, User: {user_id}, Size: {file_size / (1024*1024):.2f} MB).")
 
-        # 2. Extract content using format-specific extractor
+        # 2. Extract content using format-specific extractor (passing file_source directly to avoid duplicate RAM overhead)
         extracted_doc: ExtractedDocument
         if format_type == "pdf":
-            # Pass file_source directly (path or bytes) to prevent RAM ballooning on large PDFs
             extracted_doc = self.pdf_extractor_adapter.extract(
                 file_bytes=file_source,
                 document_id=document_id,
@@ -106,11 +105,7 @@ class DocumentProcessor:
                 on_progress=on_stage_update
             )
         else:
-            if isinstance(file_source, str):
-                with open(file_source, "rb") as f:
-                    file_bytes = f.read()
-            else:
-                file_bytes = file_source
+            file_bytes = file_source
 
             if on_stage_update:
                 on_stage_update(

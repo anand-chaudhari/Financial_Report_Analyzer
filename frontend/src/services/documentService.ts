@@ -3,16 +3,19 @@ import { ApiResponse } from '../types';
 import { ReportItem } from '../types/report';
 
 export const documentService = {
-  async uploadDocument(file: File): Promise<ReportItem> {
+  async uploadDocument(file: File, onProgress?: (pct: number) => void): Promise<ReportItem> {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Call /api/documents/upload with 60,000ms timeout since endpoint returns immediately after queuing
+    // Call /api/documents/upload with 300,000ms (5 min) timeout for 30MB+ / 200MB PDFs
     const response = await apiClient.post<any>('/documents/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
+      timeout: 300000,
+      onUploadProgress: (progressEvent) => {
+        if (progressEvent.total && onProgress) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(percent);
+        }
       },
-      timeout: 60000,
     });
 
     const resData = response.data;
@@ -112,6 +115,26 @@ export const documentService = {
       return true;
     } catch (e) {
       console.warn('Failed to delete document from backend:', e);
+      return false;
+    }
+  },
+
+  async renameDocument(documentId: string, newName: string): Promise<boolean> {
+    try {
+      await apiClient.patch(`/documents/${documentId}/rename`, { new_name: newName });
+      return true;
+    } catch (e) {
+      console.warn('Failed to rename document:', e);
+      return false;
+    }
+  },
+
+  async retryDocument(documentId: string): Promise<boolean> {
+    try {
+      await apiClient.post(`/documents/${documentId}/retry`);
+      return true;
+    } catch (e) {
+      console.warn('Failed to retry document processing:', e);
       return false;
     }
   },

@@ -397,7 +397,7 @@ export const RichMarkdownRenderer: React.FC<{
   content: string;
   sources?: SourceMetadata[];
   onOpenSourceModal?: (s: SourceMetadata) => void;
-}> = ({ content, sources, onOpenSourceModal }) => {
+}> = React.memo(({ content, sources, onOpenSourceModal }) => {
   if (!content) return null;
 
   const lines = content.split('\n');
@@ -552,6 +552,6 @@ export const RichMarkdownRenderer: React.FC<{
   if (listBuffer.length > 0) flushList(lines.length);
 
   return <div className="space-y-1">{elements}</div>;
-};
+});
 
 export default RichMarkdownRenderer;

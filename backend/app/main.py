@@ -27,15 +27,33 @@ async def lifespan(app: FastAPI):
     current_mem, _ = tracemalloc.get_traced_memory()
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION} in [{settings.ENVIRONMENT}] mode (Boot Memory: {current_mem/(1024*1024):.2f} MB)...")
     
+    # Configure high-capacity ThreadPoolExecutor for asyncio.to_thread
+    import concurrent.futures
+    import asyncio
+    loop = asyncio.get_running_loop()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="api_worker")
+    loop.set_default_executor(executor)
+
     # Initialize Firebase Admin SDK if credentials exist
     get_firebase_app()
     
     # Ensure local upload directory exists
     os.makedirs(os.path.join(os.getcwd(), "uploads"), exist_ok=True)
+
+    # Eagerly pre-warm embedding model in background so user Q&A is instant
+    def warm_embedder():
+        try:
+            from .vectorstore.embeddings import get_embedding_function
+            get_embedding_function()
+        except Exception as e:
+            logger.debug(f"Pre-warm embedding model notice: {str(e)}")
+
+    executor.submit(warm_embedder)
     
     yield
     
     logger.info("Shutting down application...")
+    executor.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
@@ -130,7 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api")
     app.include_router(conversations_router, prefix="/api")
 
-    # Root redirect / status (Supports GET and HEAD for automated platform health probes like Render)
+    # Root redirect / status (Supports GET and HEAD for automated platform health probes)
     @app.api_route("/", methods=["GET", "HEAD"], tags=["Root"])
     async def root():
         return {

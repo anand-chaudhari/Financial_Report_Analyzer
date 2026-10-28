@@ -23,6 +23,38 @@ from .cache_service import get_ai_cache_service
 logger = setup_logger(__name__)
 
 
+def _safe_json_loads(raw_text: str) -> Dict[str, Any]:
+    """Bulletproof JSON parser for LLM responses with json_repair fallback."""
+    if not raw_text or not raw_text.strip():
+        return {}
+    cleaned = raw_text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if match:
+        cleaned = match.group(0)
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    try:
+        import json_repair
+        parsed = json_repair.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception as ex:
+        logger.warning(f"Failed to repair LLM json: {ex}")
+
+    return {}
+
+
 class FinancialService:
     """
     Service handling executive financial summaries and precision chart data extraction.
@@ -226,17 +258,7 @@ class FinancialService:
                     prompt = FINANCIAL_ANALYTICS_EXTRACTION_PROMPT.format(context=context_text)
                     try:
                         raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=1800)
-                        cleaned_json = raw_response.strip()
-                        if "```json" in cleaned_json:
-                            cleaned_json = cleaned_json.split("```json")[1].split("```")[0].strip()
-                        elif "```" in cleaned_json:
-                            cleaned_json = cleaned_json.split("```")[1].split("```")[0].strip()
-
-                        match = re.search(r"\{[\s\S]*\}", cleaned_json)
-                        if match:
-                            cleaned_json = match.group(0)
-
-                        parsed = json.loads(cleaned_json)
+                        parsed = _safe_json_loads(raw_response)
                         company_name = parsed.get("company_name", company_name)
                         currency = parsed.get("currency", currency)
 
@@ -508,17 +530,7 @@ Filing Context:
                 raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=2000)
 
                 try:
-                    clean_str = raw_response.strip()
-                    if "```json" in clean_str:
-                        clean_str = clean_str.split("```json")[1].split("```")[0].strip()
-                    elif "```" in clean_str:
-                        clean_str = clean_str.split("```")[1].split("```")[0].strip()
-
-                    match = re.search(r"\{[\s\S]*\}", clean_str)
-                    if match:
-                        clean_str = match.group(0)
-
-                    parsed = json.loads(clean_str)
+                    parsed = _safe_json_loads(raw_response)
 
                     def build_item(key: str, label: str) -> OverviewMetricItem:
                         data = parsed.get(key, {})
@@ -713,17 +725,7 @@ Filing Context:
                 raw_response = self.llm_client.generate(prompt=prompt, temperature=0.0, max_tokens=2500)
 
                 try:
-                    clean_str = raw_response.strip()
-                    if "```json" in clean_str:
-                        clean_str = clean_str.split("```json")[1].split("```")[0].strip()
-                    elif "```" in clean_str:
-                        clean_str = clean_str.split("```")[1].split("```")[0].strip()
-
-                    match = re.search(r"\{[\s\S]*\}", clean_str)
-                    if match:
-                        clean_str = match.group(0)
-
-                    parsed = json.loads(clean_str)
+                    parsed = _safe_json_loads(raw_response)
 
                     reported = [
                         RiskItem(

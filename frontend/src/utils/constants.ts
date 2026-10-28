@@ -3,8 +3,17 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 export const APP_CONFIG = {
   appName: 'FinSight AI',
   tagline: 'Intelligent Financial Document Analysis & Visual Insights',
-  maxFileSizeMB: 25,
-  allowedMimeTypes: ['application/pdf'],
+  maxFileSizeMB: 250,
+  allowedMimeTypes: [
+    'application/pdf',
+    'text/csv',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/plain',
+    'text/markdown',
+    'application/json'
+  ],
 };
 
 export const ROUTES = {

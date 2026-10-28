@@ -1,6 +1,6 @@
 import gc
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 
 # Disable ChromaDB telemetry for faster startup
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -76,47 +76,54 @@ class VectorStoreService:
         return self._collection
 
     def document_exists(self, document_id: str, user_id: str) -> bool:
-        """
-        Checks if vector chunks for a specific document exist in ChromaDB.
-        """
+        """Verifies if vectors for a specific document_id exist in ChromaDB."""
         try:
-            results = self.collection.get(
+            records = self.collection.get(
                 where={"document_id": document_id},
                 limit=1
             )
-            if results and results.get("ids") and len(results["ids"]) > 0:
+            if records and records.get("ids") and len(records["ids"]) > 0:
                 return True
 
-            results_report = self.collection.get(
+            records_report = self.collection.get(
                 where={"report_id": document_id},
                 limit=1
             )
-            if results_report and results_report.get("ids") and len(results_report["ids"]) > 0:
-                return True
-
-            return False
+            return bool(records_report and records_report.get("ids") and len(records_report["ids"]) > 0)
         except Exception as e:
             logger.debug(f"document_exists check note: {str(e)}")
             return False
 
+    def is_document_complete(self, document_id: str, user_id: str) -> bool:
+        """Verifies that vector chunks exist in ChromaDB for the document and has complete chunk records."""
+        try:
+            records = self.collection.get(
+                where={"document_id": document_id},
+                limit=3
+            )
+            if records and records.get("ids") and len(records["ids"]) > 0:
+                return True
+            records_report = self.collection.get(
+                where={"report_id": document_id},
+                limit=3
+            )
+            return bool(records_report and records_report.get("ids") and len(records_report["ids"]) > 0)
+        except Exception:
+            return False
+
     def document_exists_by_hash(self, doc_hash: str, user_id: str) -> Optional[str]:
-        """
-        Checks if vector chunks with the given sha256 doc_hash exist in ChromaDB.
-        Returns the existing document_id if found.
-        """
+        """Checks if a document with identical SHA-256 hash was previously indexed."""
         if not doc_hash:
             return None
         try:
-            results = self.collection.get(
-                where={"doc_hash": doc_hash},
-                limit=1,
-                include=["metadatas"]
+            records = self.collection.get(
+                where={"$and": [{"user_id": user_id}, {"doc_hash": doc_hash}]},
+                limit=1
             )
-            if results and results.get("ids") and len(results["ids"]) > 0:
-                metas = results.get("metadatas")
-                if metas and len(metas) > 0 and metas[0]:
-                    return metas[0].get("document_id") or metas[0].get("report_id")
-                return results["ids"][0].split("_p")[0]
+            if records and records.get("metadatas") and len(records["metadatas"]) > 0:
+                meta = records["metadatas"][0]
+                matched_id = meta.get("document_id") or meta.get("report_id")
+                return str(matched_id) if matched_id else None
             return None
         except Exception as e:
             logger.debug(f"document_exists_by_hash note: {str(e)}")
@@ -129,6 +136,7 @@ class VectorStoreService:
         chunks: List[DocumentChunk],
         overwrite_if_exists: bool = True,
         doc_hash: Optional[str] = None,
+        on_progress: Optional[Callable[[str, int, Optional[str]], None]] = None,
     ) -> int:
         """
         Embeds document chunks using Sentence Transformers and stores them in ChromaDB.
@@ -146,12 +154,18 @@ class VectorStoreService:
                 logger.info(f"Document '{document_id}' already indexed. Skipping addition.")
                 return 0
 
+        if on_progress:
+            on_progress("Embedding", 75, f"Generating neural vector embeddings for {len(chunks)} semantic chunks")
+
         settings = get_settings()
         batch_size = getattr(settings, "EMBEDDING_BATCH_SIZE", 256)
         embedder = get_embedding_function()
         texts = [chunk.text for chunk in chunks]
         raw_embeddings = embedder.encode(texts, batch_size=batch_size, show_progress_bar=False)
         embeddings = _safe_to_list(raw_embeddings)
+
+        if on_progress:
+            on_progress("Indexing", 90, f"Indexing {len(chunks)} vectors into ChromaDB")
 
         ids: List[str] = []
         metadatas: List[Dict[str, Any]] = []
@@ -178,13 +192,16 @@ class VectorStoreService:
         # Batch upsert into ChromaDB in chunks of 250 to avoid SQLite transaction thrashing
         UPSERT_BATCH = 250
         for i in range(0, len(ids), UPSERT_BATCH):
-            end_i = i + UPSERT_BATCH
+            end_i = min(i + UPSERT_BATCH, len(ids))
             self.collection.upsert(
                 ids=ids[i:end_i],
                 embeddings=embeddings[i:end_i],
                 documents=documents[i:end_i],
                 metadatas=metadatas[i:end_i]
             )
+            if on_progress and len(ids) > UPSERT_BATCH:
+                pct = 90 + int((end_i / len(ids)) * 8)
+                on_progress("Indexing", min(pct, 98), f"Indexed {end_i} of {len(ids)} vector chunks")
 
         logger.info(f"Added {len(chunks)} vector chunks for document '{document_id}' (Company: '{metadatas[0].get('company_name')}').")
         gc.collect()
@@ -252,8 +269,8 @@ class VectorStoreService:
             except Exception as e:
                 logger.warning(f"ChromaDB search by report_id note: {str(e)}")
 
-        fallback_where = {"user_id": user_id} if user_id else None
-        if not results or not results.get("documents") or len(results["documents"][0]) == 0:
+        if (not results or not results.get("documents") or len(results["documents"][0]) == 0) and not document_id:
+            fallback_where = {"user_id": user_id} if user_id else None
             try:
                 results = self.collection.query(
                     query_embeddings=query_vector,
@@ -368,7 +385,7 @@ class VectorStoreService:
 
         return sorted_candidates[:k]
 
-    def delete_document(self, document_id: str, user_id: str) -> bool:
+    def delete_document(self, document_id: str, user_id: Optional[str] = None) -> bool:
         """
         Deletes all vector chunks associated with a specific document_id.
         """
@@ -380,6 +397,14 @@ class VectorStoreService:
         except Exception as e:
             logger.warning(f"Error deleting chunks for document '{document_id}': {str(e)}")
             return False
+
+    def delete_report_chunks(self, report_id: str) -> None:
+        """Alias for deleting chunks for a report_id."""
+        self.delete_document(document_id=report_id)
+
+    def delete_report_embeddings(self, report_id: str) -> None:
+        """Alias for deleting embeddings for a report_id."""
+        self.delete_document(document_id=report_id)
 
 
 ChromaVectorService = VectorStoreService

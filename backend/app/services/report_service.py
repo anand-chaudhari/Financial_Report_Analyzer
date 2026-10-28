@@ -128,22 +128,32 @@ class ReportService:
         return sorted(reports, key=lambda x: x.uploaded_at, reverse=True)
 
     def delete_report(self, report_id: str, user_id: str) -> bool:
-        """Deletes a report, its Firestore metadata, and its vector embeddings."""
+        """Deletes a report, its Firestore metadata, vector embeddings, and AI cache."""
         report = self.get_report(report_id, user_id)
         if not report:
             return False
 
+        try:
+            from .cache_service import get_ai_cache_service
+            get_ai_cache_service().invalidate_document_cache(document_id=report_id, user_id=user_id)
+        except Exception as cache_err:
+            logger.debug(f"Cache invalidation note: {cache_err}")
+
         if self.firestore_db:
-            try:
-                self.firestore_db.collection("reports").document(report_id).delete()
-            except Exception as e:
-                logger.error(f"Firestore delete_report error: {str(e)}")
+            def _async_del():
+                try:
+                    self.firestore_db.collection("reports").document(report_id).delete()
+                except Exception as e:
+                    logger.debug(f"Firestore delete_report error: {str(e)}")
+            import threading
+            threading.Thread(target=_async_del, daemon=True).start()
 
         if report_id in _in_memory_reports:
             del _in_memory_reports[report_id]
 
         self.vector_service.delete_report_embeddings(report_id)
         return True
+
 
     def _save_report(self, report: ReportModel) -> None:
         """Helper to save report to Firestore and in-memory cache."""

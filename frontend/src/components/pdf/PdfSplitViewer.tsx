@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Maximize2,
@@ -34,11 +34,20 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(100);
 
-  // Derive source PDF URL
+  // Sync page when highlightSource changes
+  useEffect(() => {
+    if (highlightSource?.page_number && highlightSource.page_number > 0) {
+      setCurrentPage(highlightSource.page_number);
+    }
+  }, [highlightSource]);
+
+  // Derive source PDF URL without hash fragments
   const serverOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
-  const pdfUrl = storageUrl
+  const rawPdfUrl = storageUrl
     ? (storageUrl.startsWith('http') ? storageUrl : `${serverOrigin}${storageUrl}`)
-    : `${API_BASE_URL}/documents/preview/${encodeURIComponent(fileName)}#page=${currentPage}`;
+    : `${API_BASE_URL}/documents/preview/${encodeURIComponent(fileName)}`;
+  const basePdfUrl = rawPdfUrl.split('#')[0];
+  const iframePdfUrl = `${basePdfUrl}#page=${currentPage}&zoom=${zoom}`;
 
   const handlePrevPage = () => {
     if (currentPage > 1) setCurrentPage((prev) => prev - 1);
@@ -74,7 +83,7 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
           <div className="flex items-center gap-1 bg-slate-800/60 rounded-lg p-0.5 border border-slate-700/50 mr-1">
             <button
               onClick={() => setZoom((z) => Math.max(50, z - 15))}
-              className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50"
+              className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50 cursor-pointer"
               title="Zoom Out"
             >
               <ZoomOut className="w-3 h-3" />
@@ -82,7 +91,7 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
             <span className="text-[10px] font-mono px-1 text-slate-300">{zoom}%</span>
             <button
               onClick={() => setZoom((z) => Math.min(200, z + 15))}
-              className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50"
+              className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50 cursor-pointer"
               title="Zoom In"
             >
               <ZoomIn className="w-3 h-3" />
@@ -92,7 +101,7 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
           {/* Expand / Minimize */}
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
             title={isExpanded ? 'Restore Split' : 'Expand Fullscreen'}
           >
             {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -101,7 +110,7 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
           {/* Close */}
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
             title="Close Split View"
           >
             <X className="w-4 h-4" />
@@ -132,8 +141,8 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
       {/* PDF View Container */}
       <div className="flex-1 w-full bg-slate-950 relative overflow-hidden flex flex-col">
         <iframe
-          key={`${pdfUrl}_${currentPage}_${zoom}`}
-          src={`${pdfUrl}#page=${currentPage}&zoom=${zoom}`}
+          key={`${basePdfUrl}_${currentPage}_${zoom}`}
+          src={iframePdfUrl}
           className="w-full h-full border-0 bg-slate-900"
           title="PDF Document Viewer"
         />
@@ -145,7 +154,7 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
           <button
             onClick={handlePrevPage}
             disabled={currentPage <= 1}
-            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
@@ -154,14 +163,14 @@ export const PdfSplitViewer: React.FC<PdfSplitViewerProps> = ({
           </span>
           <button
             onClick={handleNextPage}
-            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700"
+            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer"
           >
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
         <a
-          href={pdfUrl}
+          href={iframePdfUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-[10px] text-emerald-400 hover:underline flex items-center gap-1 font-semibold"

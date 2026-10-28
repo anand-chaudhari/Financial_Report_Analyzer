@@ -28,33 +28,6 @@ class SummaryService:
         self.llm_client = GroqLLMClient()
         self.cache_service = get_ai_cache_service()
 
-    def _find_pdf_path(self, document_id: str, user_id: str) -> Optional[str]:
-        """Locates the PDF file on disk across all potential upload roots."""
-        upload_roots = _get_uploads_roots()
-        for root_dir in upload_roots:
-            if not os.path.exists(root_dir):
-                continue
-            # 1. Direct match: <root_dir>/<user_id>/<document_id>
-            user_doc_dir = os.path.join(root_dir, user_id, document_id)
-            if os.path.exists(user_doc_dir):
-                pdfs = [f for f in os.listdir(user_doc_dir) if f.lower().endswith(".pdf")]
-                if pdfs:
-                    return os.path.join(user_doc_dir, pdfs[0])
-
-            # 2. Walk match: any folder named document_id
-            for r, dirs, files in os.walk(root_dir):
-                if os.path.basename(r) == document_id:
-                    pdfs = [f for f in files if f.lower().endswith(".pdf")]
-                    if pdfs:
-                        return os.path.join(r, pdfs[0])
-
-            # 3. Fallback: all pdfs in root_dir
-            for r, dirs, files in os.walk(root_dir):
-                for f in files:
-                    if f.lower().endswith(".pdf"):
-                        return os.path.join(r, f)
-        return None
-
     def generate_document_summary(
         self,
         document_id: str,
@@ -63,7 +36,7 @@ class SummaryService:
     ) -> Dict[str, Any]:
         """
         Generates a comprehensive, 11-section grounded financial report summary for a document.
-        STRICT GROUNDING: Strictly extracts and displays data present in the PDF report.
+        STRICT GROUNDING: Strictly extracts and displays data present in the report.
         """
         cache_key = self.cache_service.build_cache_key("doc_summary", user_id=user_id, document_id=document_id)
         lock = self.cache_service.get_lock_for_key(cache_key)
@@ -71,6 +44,11 @@ class SummaryService:
         with lock:
             cached = self.cache_service.get_cached_result(cache_key, force_refresh=force_refresh)
             if cached:
+                # Sanitize kpis in cached result if any have value=None or empty
+                if isinstance(cached, dict) and "kpis" in cached and isinstance(cached["kpis"], list):
+                    for k in cached["kpis"]:
+                        if isinstance(k, dict) and (k.get("value") is None or str(k.get("value")).strip().lower() in ("none", "null", "")):
+                            k["value"] = "Not disclosed"
                 return cached
 
             self.cache_service.set_pending_status(cache_key, "doc_summary", user_id, [document_id])
@@ -95,11 +73,17 @@ class SummaryService:
         doc = self.document_service.get_document(document_id=document_id, user_id=user_id)
         ensure_document_indexed(document_id=document_id, user_id=user_id)
 
-        company_name = doc.companyName if doc and doc.companyName and doc.companyName.lower() not in ("annual", "report", "unknown") else "Tata Consultancy Services Limited"
-        fin_year = doc.financialYear if doc and doc.financialYear else "FY2026"
-        file_name = doc.fileName if doc and doc.fileName else "annual_report_2025_2026.pdf"
+        if doc and doc.companyName and doc.companyName.strip() and doc.companyName.lower() not in ("annual", "report", "unknown", "financial report"):
+            company_name = doc.companyName.strip()
+        elif doc and doc.fileName:
+            company_name = doc.fileName.rsplit(".", 1)[0].replace("_", " ").title()
+        else:
+            company_name = "Corporate Entity"
 
-        # 2. Retrieve Document Chunks from ChromaDB & Direct PDF Extraction
+        fin_year = doc.financialYear if doc and doc.financialYear else "FY2026"
+        file_name = doc.fileName if doc and doc.fileName else f"report_{document_id}"
+
+        # 2. Retrieve Document Chunks from ChromaDB & Direct File Extraction
         retrieved_chunks: List[Dict[str, Any]] = []
         retrieved_pages: set = set()
         seen_texts: set = set()
@@ -143,7 +127,7 @@ class SummaryService:
             search_queries = [
                 "Statement of Profit and Loss Revenue from operations Total Income Net Profit PAT",
                 "Balance Sheet Total Equity Liabilities Current Non-Current Assets",
-                "Tata Consultancy Services Financial Highlights Overview Performance",
+                f"{company_name} Financial Highlights Overview Performance",
                 "Independent Auditors Report Significant Accounting Policies",
                 "Cash flow from operating activities capital expenditure financing",
                 "Total assets total liabilities borrowings trade payables share capital"
@@ -172,27 +156,43 @@ class SummaryService:
                         "section": item.get("section") or "Financial Statement"
                     })
 
-        # Step 2C: Direct PDF Disk Extraction Fallback if Chunks are Sparse
-        pdf_path = self._find_pdf_path(document_id, user_id)
-        if len(retrieved_chunks) < 8 and pdf_path and os.path.exists(pdf_path):
-            try:
-                fitz_doc = fitz.open(pdf_path)
-                total_p = len(fitz_doc)
-                # Sample key pages: First 10 pages (Overview/Highlights) + Middle pages (Statements)
-                sample_indices = list(range(min(12, total_p)))
-                for idx in sample_indices:
-                    t = fitz_doc[idx].get_text("text").strip()
-                    if t and t not in seen_texts:
-                        seen_texts.add(t)
-                        retrieved_pages.add(idx + 1)
+        # Step 2C: Direct File Content Fallback if Chunks are Sparse for THIS specific document
+        file_path = self.document_service.get_document_file_path(document_id, user_id)
+        if len(retrieved_chunks) < 2 and file_path and os.path.exists(file_path):
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext == ".pdf":
+                try:
+                    fitz_doc = fitz.open(file_path)
+                    total_p = len(fitz_doc)
+                    # Sample key pages: First 10 pages (Overview/Highlights) + Middle pages (Statements)
+                    sample_indices = list(range(min(12, total_p)))
+                    for idx in sample_indices:
+                        t = fitz_doc[idx].get_text("text").strip()
+                        if t and t not in seen_texts:
+                            seen_texts.add(t)
+                            retrieved_pages.add(idx + 1)
+                            retrieved_chunks.append({
+                                "text": t,
+                                "page_number": idx + 1,
+                                "section": "Corporate Overview / Financial Highlights"
+                            })
+                    fitz_doc.close()
+                except Exception as read_err:
+                    logger.warning(f"Note direct reading PDF pages for {document_id}: {str(read_err)}")
+            elif ext in (".csv", ".tsv", ".txt", ".json"):
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        file_text = f.read(60000)
+                    if file_text and file_text not in seen_texts:
+                        seen_texts.add(file_text)
+                        retrieved_pages.add(1)
                         retrieved_chunks.append({
-                            "text": t,
-                            "page_number": idx + 1,
-                            "section": "Corporate Overview / Financial Highlights"
+                            "text": file_text,
+                            "page_number": 1,
+                            "section": "Financial Statement Data"
                         })
-                fitz_doc.close()
-            except Exception as read_err:
-                logger.warning(f"Note direct reading PDF pages: {str(read_err)}")
+                except Exception as read_err:
+                    logger.warning(f"Error reading {ext} file for {document_id}: {str(read_err)}")
 
         # Sort chunks by page number chronologically
         retrieved_chunks.sort(key=lambda c: c.get("page_number", 1))
@@ -214,11 +214,11 @@ class SummaryService:
             "2. State amounts with their exact currency symbols and units in bold (e.g. **₹255,200 Crore**, **₹48,500 Crore**, **$29.5 Billion**, **14.2%**).\n"
             "3. State the exact page number where each piece of information was found (e.g. [Page X]).\n"
             "4. Provide a rich, professional 2-3 paragraph executive summary summarizing the company's annual performance, business model, and operational milestones.\n"
-            "5. Populate KPI cards with the exact values found in the report (never output 'Refer to report').\n"
+            "5. Populate KPI cards with the exact values found in the report (never output 'Refer to report'). If a KPI value is not available in the report, output 'Not disclosed' as a string (never use null).\n"
             "6. Return strictly VALID JSON with NO markdown wrappers.\n\n"
             "JSON SCHEMA:\n"
             "{\n"
-            "  \"company_name\": \"Tata Consultancy Services Limited\",\n"
+            "  \"company_name\": \"Corporate Entity Name\",\n"
             "  \"financial_year\": \"FY2026\",\n"
             "  \"executive_summary\": {\"text\": \"Comprehensive 2-3 paragraph executive synthesis of annual performance, strategic positioning, and revenue growth.\", \"pages\": [1, 4]},\n"
             "  \"key_financial_highlights\": {\"text\": \"Key highlights bulleted with bold numbers and fiscal periods.\", \"pages\": [1, 4]},\n"
@@ -295,13 +295,36 @@ class SummaryService:
         extracted_company = parsed_json.get("company_name") if parsed_json and parsed_json.get("company_name") and len(parsed_json.get("company_name")) > 3 else company_name
         extracted_year = parsed_json.get("financial_year") if parsed_json and parsed_json.get("financial_year") else fin_year
 
-        # KPI fallback ensuring real values
-        kpis = parsed_json.get("kpis", []) if parsed_json and isinstance(parsed_json.get("kpis"), list) and len(parsed_json.get("kpis", [])) > 0 else [
-            {"label": "Revenue", "value": "₹240,893 Cr", "change": "Reported"},
-            {"label": "Net Profit", "value": "₹45,908 Cr", "change": "Reported"},
-            {"label": "Operating Margin", "value": "24.6%", "change": "Verified"},
-            {"label": "Total Assets", "value": "₹144,300 Cr", "change": "Reported"}
-        ]
+        # KPI sanitization ensuring valid string values
+        raw_kpis = parsed_json.get("kpis", []) if parsed_json and isinstance(parsed_json.get("kpis"), list) and len(parsed_json.get("kpis", [])) > 0 else []
+        cleaned_kpis = []
+        for k in raw_kpis:
+            if isinstance(k, dict):
+                lbl = str(k.get("label") or "Financial Metric").strip()
+                val = k.get("value")
+                if val is None or str(val).strip().lower() in ("none", "null", ""):
+                    val = "Not disclosed"
+                else:
+                    val = str(val).strip()
+
+                chg = k.get("change")
+                if chg is not None:
+                    chg = str(chg).strip()
+
+                cleaned_kpis.append({
+                    "label": lbl,
+                    "value": val,
+                    "change": chg,
+                    "icon": k.get("icon")
+                })
+
+        if not cleaned_kpis:
+            cleaned_kpis = [
+                {"label": "Revenue", "value": "Not disclosed", "change": "Reported"},
+                {"label": "Net Profit", "value": "Not disclosed", "change": "Reported"},
+                {"label": "Operating Margin", "value": "Not disclosed", "change": "Verified"},
+                {"label": "Total Assets", "value": "Not disclosed", "change": "Reported"}
+            ]
 
         final_summary = {
             "success": True,
@@ -320,7 +343,7 @@ class SummaryService:
             "business_risks": get_sec("business_risks", "Risk factors and disclosures"),
             "management_discussion": get_sec("management_discussion", "Management discussion and operational analysis"),
             "future_plans": get_sec("future_plans", "Strategic vision and future outlook"),
-            "kpis": kpis
+            "kpis": cleaned_kpis
         }
 
         _summary_cache[cache_key] = final_summary

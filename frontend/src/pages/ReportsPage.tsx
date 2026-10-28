@@ -1,37 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useReportContext } from '../context/ReportContext';
 import { ReportCard } from '../components/ReportCard';
 import { EmptyState } from '../components/EmptyState';
-import { Search, Filter, UploadCloud, FileText } from 'lucide-react';
+import { ConfirmModal } from '../components/common/ConfirmModal';
+import { RenameModal } from '../components/common/RenameModal';
+import { Search, UploadCloud, FileText, AlertCircle } from 'lucide-react';
+import { ReportItem } from '../types/report';
 
 export const ReportsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { reports, deleteReport, loading } = useReportContext();
+  const { reports, deleteReport, renameReport } = useReportContext();
 
   const [selectedFilter, setSelectedFilter] = useState<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [reportToDelete, setReportToDelete] = useState<ReportItem | null>(null);
+  const [reportToRename, setReportToRename] = useState<ReportItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const filterOptions: Array<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'> = [
-    'All',
-    '10-K',
-    '10-Q',
-    'Earnings',
-    'Annual',
-  ];
+  const filterOptions: Array<'All' | '10-K' | '10-Q' | 'Earnings' | 'Annual'> = useMemo(
+    () => ['All', '10-K', '10-Q', 'Earnings', 'Annual'],
+    []
+  );
 
-  const filteredReports = reports.filter((r) => {
-    const type = r.filingType || '10-K';
-    const matchesFilter = selectedFilter === 'All' || type === selectedFilter;
-    const company = r.companyName || r.company_name || r.filename;
-    const ticker = r.ticker || '';
-    const name = r.fileName || r.filename;
-    const matchesSearch =
-      company.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticker.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
+  const filteredReports = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return reports.filter((r) => {
+      const type = r.filingType || '10-K';
+      const matchesFilter = selectedFilter === 'All' || type === selectedFilter;
+      if (!matchesFilter) return false;
+      if (!q) return true;
+      const company = (r.companyName || r.company_name || r.filename || '').toLowerCase();
+      const ticker = (r.ticker || '').toLowerCase();
+      const name = (r.fileName || r.filename || '').toLowerCase();
+      return company.includes(q) || ticker.includes(q) || name.includes(q);
+    });
+  }, [reports, selectedFilter, searchQuery]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!reportToDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteReport(reportToDelete.id);
+      setReportToDelete(null);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to delete report. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [reportToDelete, deleteReport]);
 
   return (
     <div className="space-y-6 animate-fade-in w-full min-w-0">
@@ -53,6 +72,21 @@ export const ReportsPage: React.FC = () => {
           <span>Upload Filing PDF</span>
         </button>
       </div>
+
+      {deleteError && (
+        <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 flex items-center justify-between text-rose-700 dark:text-rose-400 text-xs animate-shake">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{deleteError}</span>
+          </div>
+          <button
+            onClick={() => setDeleteError(null)}
+            className="text-xs font-bold hover:underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -92,7 +126,8 @@ export const ReportsPage: React.FC = () => {
               key={report.id}
               report={report}
               onAnalyze={() => navigate(`/analyst?doc=${report.id}`)}
-              onDelete={() => deleteReport(report.id)}
+              onDelete={() => setReportToDelete(report)}
+              onRename={() => setReportToRename(report)}
             />
           ))}
         </div>
@@ -109,6 +144,33 @@ export const ReportsPage: React.FC = () => {
           icon={FileText}
         />
       )}
+
+      {/* Confirmation Modal for Document Deletion */}
+      <ConfirmModal
+        isOpen={!!reportToDelete}
+        title="Delete Financial Report"
+        description={`Are you sure you want to delete "${reportToDelete?.companyName || reportToDelete?.fileName || 'this filing'}"? This action permanently removes stored files, vector embeddings, and all generated AI analysis.`}
+        confirmLabel="Delete Report"
+        cancelLabel="Cancel"
+        isDanger
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => {
+          if (!isDeleting) setReportToDelete(null);
+        }}
+      />
+
+      {/* Modal for Document Renaming */}
+      <RenameModal
+        isOpen={!!reportToRename}
+        initialName={reportToRename?.companyName || reportToRename?.fileName || ''}
+        onConfirm={async (newName) => {
+          if (reportToRename) {
+            await renameReport(reportToRename.id, newName);
+          }
+        }}
+        onClose={() => setReportToRename(null)}
+      />
     </div>
   );
 };

@@ -5,6 +5,7 @@ import shutil
 import io
 import hashlib
 import json
+import time
 import concurrent.futures
 import threading
 from datetime import datetime
@@ -24,6 +25,9 @@ from ..config import get_settings
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+INDEX_PIPELINE_VERSION = "2.2.0"
+EMBEDDING_MODEL_KEY = "all-MiniLM-L6-v2"
 
 # In-memory storage fallback for local development
 _in_memory_documents: Dict[str, DocumentModel] = {}
@@ -68,14 +72,49 @@ def _get_uploads_roots() -> List[str]:
     """Finds all potential upload roots across repo root and backend working directories."""
     roots = []
     candidates = [
-        os.path.join(os.getcwd(), "uploads"),
-        os.path.join(os.getcwd(), "backend", "uploads"),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads"),
+        os.path.abspath(os.path.join(os.getcwd(), "uploads")),
+        os.path.abspath(os.path.join(os.getcwd(), "backend", "uploads")),
+        os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")),
+        os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "backend", "uploads")),
     ]
     for c in candidates:
-        if os.path.exists(c) and c not in roots:
-            roots.append(c)
-    return roots if roots else [os.path.join(os.getcwd(), "uploads")]
+        norm = os.path.normpath(c)
+        if os.path.exists(norm) and norm not in roots:
+            roots.append(norm)
+    return roots if roots else [os.path.abspath(os.path.join(os.getcwd(), "uploads"))]
+
+
+def _get_deleted_documents_file() -> str:
+    roots = _get_uploads_roots()
+    base = roots[0] if roots else os.path.join(os.getcwd(), "uploads")
+    return os.path.join(base, ".deleted_documents.json")
+
+
+_deleted_documents: set = set()
+
+
+def _load_deleted_documents() -> set:
+    global _deleted_documents
+    p = _get_deleted_documents_file()
+    if os.path.isfile(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                _deleted_documents.update(json.load(f))
+        except Exception:
+            pass
+    return _deleted_documents
+
+
+def _mark_document_deleted(document_id: str) -> None:
+    global _deleted_documents
+    _deleted_documents.add(document_id)
+    p = _get_deleted_documents_file()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(list(_deleted_documents), f)
+    except Exception:
+        pass
 
 
 class ProcessingCancellationManager:
@@ -114,6 +153,8 @@ SUPPORTED_EXTENSIONS = (
     ".pdf", ".xlsx", ".xlsm", ".xltx", ".xls", ".csv", ".tsv", ".docx", ".docm", ".dotx", ".txt", ".text", ".md", ".markdown", ".json"
 )
 
+SYSTEM_AUXILIARY_FILES = {"metadata.json", "knowledge_card.json", "knowledge_graph.json", "analysis.json"}
+
 
 class DocumentService:
     """
@@ -149,9 +190,30 @@ class DocumentService:
                         doc_path = os.path.join(user_path, doc_dir)
                         if not os.path.isdir(doc_path) or doc_dir.startswith("."):
                             continue
-                        files = [f for f in os.listdir(doc_path) if any(f.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)]
+                        
+                        # Priority 1: Restore directly from persistent metadata.json if present
+                        meta_file = os.path.join(doc_path, "metadata.json")
+                        if os.path.isfile(meta_file):
+                            try:
+                                with open(meta_file, "r", encoding="utf-8") as mf:
+                                    data = json.load(mf)
+                                    loaded_doc = DocumentModel.from_dict(data)
+                                    _in_memory_documents[doc_dir] = loaded_doc
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Note reading metadata.json for '{doc_dir}': {str(e)}")
+
+                        # Priority 2: Discover actual uploaded files, excluding internal auxiliary files
+                        files = [
+                            f for f in os.listdir(doc_path)
+                            if f.lower() not in SYSTEM_AUXILIARY_FILES
+                            and not f.startswith(".")
+                            and any(f.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+                        ]
                         if not files:
                             continue
+                        # Sort so actual PDF/Office reports precede raw JSON files
+                        files.sort(key=lambda x: (x.lower().endswith(".json"), x.lower()))
                         doc_filename = files[0]
                         full_file_path = os.path.join(doc_path, doc_filename)
                         try:
@@ -251,7 +313,10 @@ class DocumentService:
         dest_file_path = os.path.join(upload_dir, filename)
 
         if os.path.abspath(temp_file_path) != os.path.abspath(dest_file_path):
-            shutil.copyfile(temp_file_path, dest_file_path)
+            try:
+                shutil.move(temp_file_path, dest_file_path)
+            except Exception:
+                shutil.copyfile(temp_file_path, dest_file_path)
 
         storage_url = f"/uploads/{user_id}/{document_id}/{filename}"
 
@@ -271,16 +336,45 @@ class DocumentService:
             financialYear=financial_year or "FY2026",
             pageCount=page_count,
             status="processing",
-            currentStage="Queued",
-            stageMessage="Queued for local background processing",
+            currentStage="Uploading",
+            stageMessage="Uploading and receiving document file stream",
             progressPercent=5,
             uploadedAt=now_iso,
             storageUrl=storage_url,
             metadata=raw_meta
         )
         self._save_to_firestore(doc_model)
+
+        doc_model.currentStage = "Queued"
+        doc_model.stageMessage = "Queued for local background processing"
+        self._save_to_firestore(doc_model)
         logger.info(f"Created queued document record '{document_id}' for '{filename}' ({page_count} pages).")
         return doc_model, False
+
+    def process_and_save_upload(
+        self,
+        file_path: str,
+        filename: str,
+        user_id: str,
+    ) -> DocumentModel:
+        """
+        Synchronous processing pipeline for testing and offline ingestion.
+        """
+        doc_model, is_completed = self.prepare_upload_record(
+            temp_file_path=file_path,
+            filename=filename,
+            user_id=user_id,
+        )
+        if not is_completed:
+            self.process_document_background(
+                document_id=doc_model.documentId,
+                user_id=user_id,
+            )
+            updated = self.get_document(doc_model.documentId, user_id)
+            if updated:
+                return updated
+        return doc_model
+
 
     def process_document_background(self, document_id: str, user_id: str):
         """
@@ -345,7 +439,8 @@ class DocumentService:
                 user_id=user_id,
                 chunks=proc_result.chunks,
                 overwrite_if_exists=True,
-                doc_hash=(doc_model.metadata or {}).get("doc_hash", "")
+                doc_hash=(doc_model.metadata or {}).get("doc_hash", ""),
+                on_progress=update_stage
             )
 
             doc_model.status = "completed"
@@ -356,6 +451,23 @@ class DocumentService:
 
             self._save_to_firestore(doc_model)
             logger.info(f"Background worker completed document '{filename}' (ID: {document_id}): {proc_result.total_pages} pages, {indexed_count} chunks.")
+
+            # Asynchronously pre-compute Structured Knowledge Card & Web Market Intelligence in background
+            def _async_enrich():
+                try:
+                    import threading
+                    from .knowledge_card_service import get_knowledge_card_service
+                    from .web_search_service import get_web_search_service
+                    k_serv = get_knowledge_card_service()
+                    k_serv.build_or_get_knowledge_card(document_id, user_id)
+                    w_serv = get_web_search_service()
+                    w_serv.get_company_stock_quote(doc_model.companyName, doc_model.ticker)
+                    w_serv.search_company_web(doc_model.companyName, "financial results earnings", max_results=3)
+                except Exception as en_err:
+                    logger.debug(f"Async enrichment notice: {str(en_err)}")
+
+            import threading
+            threading.Thread(target=_async_enrich, daemon=True).start()
 
         except InterruptedError as int_err:
             logger.warning(f"Document {document_id} processing was cancelled: {str(int_err)}")
@@ -415,12 +527,6 @@ class DocumentService:
         if self.vector_service.document_exists(document_id=document_id, user_id=user_id):
             return True
 
-        try:
-            if self.vector_service.collection.count() > 0:
-                return True
-        except Exception:
-            pass
-
         file_path = self.get_document_file_path(document_id, user_id)
         if file_path and os.path.exists(file_path):
             try:
@@ -435,6 +541,9 @@ class DocumentService:
 
     def get_document(self, document_id: str, user_id: str) -> Optional[DocumentModel]:
         """Retrieves a document record with instant in-memory and disk fallback."""
+        if not document_id or document_id in _deleted_documents:
+            return None
+
         # 1. In-memory check
         doc_local = _in_memory_documents.get(document_id)
         if doc_local and (doc_local.userId == user_id or not user_id):
@@ -480,7 +589,10 @@ class DocumentService:
     get_document_by_id = get_document
 
     def list_user_documents(self, user_id: str) -> List[DocumentModel]:
-        """Lists all document records belonging to the authenticated user with instant local fallback."""
+        """Lists all document records belonging to the authenticated user with instant local fallback and strict deduplication."""
+        deleted_ids = _load_deleted_documents()
+        docs_dict: Dict[str, DocumentModel] = {}
+
         # 1. Attempt fast Firestore query
         if self.firestore_db:
             def _fetch_list():
@@ -491,24 +603,31 @@ class DocumentService:
                 )
                 return [DocumentModel.from_dict(doc.to_dict()) for doc in docs]
 
-            result = _run_with_timeout(_fetch_list, timeout_sec=1.0)
-            if result is not None and len(result) > 0:
+            result = _run_with_timeout(_fetch_list, timeout_sec=1.5)
+            if result is not None:
                 for d in result:
+                    if d.documentId in deleted_ids:
+                        continue
+                    file_path = self.get_document_file_path(d.documentId, user_id)
+                    if not file_path and not (d.storageUrl and d.storageUrl.startswith("http")) and d.status != "processing":
+                        # Ghost document with no physical file: purge and record deleted
+                        _mark_document_deleted(d.documentId)
+                        continue
+                    docs_dict[d.documentId] = d
                     _in_memory_documents[d.documentId] = d
-                return result
 
-        # 2. In-memory documents
-        docs_dict = {
-            d.documentId: d for d in _in_memory_documents.values()
-            if d.userId == user_id or not user_id
-        }
+        # 2. Add in-memory documents
+        for doc_id, d in list(_in_memory_documents.items()):
+            if doc_id not in deleted_ids and (d.userId == user_id or not user_id):
+                if doc_id not in docs_dict:
+                    docs_dict[doc_id] = d
 
         # 3. Discover local files on disk in uploads/<user_id>/
         for root in _get_uploads_roots():
             user_dir = os.path.join(root, user_id)
             if os.path.isdir(user_dir):
                 for doc_id in os.listdir(user_dir):
-                    if doc_id in docs_dict:
+                    if doc_id in deleted_ids or doc_id == "temp" or doc_id.startswith("."):
                         continue
                     doc_dir = os.path.join(user_dir, doc_id)
                     if not os.path.isdir(doc_dir):
@@ -519,14 +638,21 @@ class DocumentService:
                             with open(meta_file, "r", encoding="utf-8") as mf:
                                 data = json.load(mf)
                                 loaded_doc = DocumentModel.from_dict(data)
-                                docs_dict[doc_id] = loaded_doc
-                                _in_memory_documents[doc_id] = loaded_doc
+                                if loaded_doc.documentId not in deleted_ids and loaded_doc.documentId not in docs_dict:
+                                    docs_dict[loaded_doc.documentId] = loaded_doc
+                                    _in_memory_documents[loaded_doc.documentId] = loaded_doc
                         except Exception:
                             pass
-                    else:
-                        pdf_files = [f for f in os.listdir(doc_dir) if f.lower().endswith(SUPPORTED_EXTENSIONS)]
-                        if pdf_files:
-                            f_name = pdf_files[0]
+                    elif doc_id not in docs_dict:
+                        supported_files = [
+                            f for f in os.listdir(doc_dir)
+                            if f.lower() not in SYSTEM_AUXILIARY_FILES
+                            and not f.startswith(".")
+                            and any(f.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+                        ]
+                        if supported_files:
+                            supported_files.sort(key=lambda x: (x.lower().endswith(".json"), x.lower()))
+                            f_name = supported_files[0]
                             f_path = os.path.join(doc_dir, f_name)
                             f_size = os.path.getsize(f_path) if os.path.exists(f_path) else 0
                             discovered_doc = DocumentModel(
@@ -534,7 +660,7 @@ class DocumentService:
                                 userId=user_id,
                                 fileName=f_name,
                                 fileSize=f_size,
-                                companyName=f_name.replace(".pdf", "").replace("_", " "),
+                                companyName=f_name.rsplit(".", 1)[0].replace("_", " "),
                                 financialYear=f"FY{datetime.utcnow().year}",
                                 pageCount=1,
                                 status="completed",
@@ -547,55 +673,160 @@ class DocumentService:
                             docs_dict[doc_id] = discovered_doc
                             _in_memory_documents[doc_id] = discovered_doc
 
-        return list(docs_dict.values())
+        # Purge ghost documents whose local file does not exist on disk
+        valid_docs = []
+        for d in docs_dict.values():
+            if d.documentId in deleted_ids:
+                continue
+            file_path = self.get_document_file_path(d.documentId, user_id)
+            if file_path and os.path.exists(file_path):
+                valid_docs.append(d)
+            elif d.storageUrl and d.storageUrl.startswith("http"):
+                valid_docs.append(d)
+            elif d.status == "processing":
+                valid_docs.append(d)
+            else:
+                _in_memory_documents.pop(d.documentId, None)
+
+        # Deduplicate: if multiple records share the exact same fileName and fileSize, keep only the latest one
+        deduped: List[DocumentModel] = []
+        seen_keys = set()
+        seen_ids = set()
+
+        for d in sorted(valid_docs, key=lambda x: str(x.uploadedAt or ""), reverse=True):
+            if d.documentId in seen_ids:
+                continue
+            seen_ids.add(d.documentId)
+
+            file_key = f"{d.fileName}_{d.fileSize}"
+            if file_key in seen_keys:
+                continue
+            seen_keys.add(file_key)
+            deduped.append(d)
+
+        return deduped
+
+    def rename_document(self, document_id: str, user_id: str, new_name: str) -> Optional[DocumentModel]:
+        """Renames a document's company and file name across memory, disk, and Firestore."""
+        doc = self.get_document(document_id, user_id)
+        if not doc:
+            return None
+
+        clean_name = new_name.strip()
+        if not clean_name:
+            return doc
+
+        # Invalidate AI caches so fresh names and metadata are loaded
+        try:
+            from .cache_service import get_ai_cache_service
+            get_ai_cache_service().invalidate_document_cache(document_id=document_id, user_id=user_id)
+        except Exception:
+            pass
+
+        if clean_name.lower().endswith(".pdf"):
+            doc.fileName = clean_name
+            doc.companyName = clean_name[:-4].replace("_", " ").strip()
+        else:
+            doc.companyName = clean_name
+
+        self._save_to_firestore(doc)
+        logger.info(f"Renamed document '{document_id}' to company='{doc.companyName}', file='{doc.fileName}'.")
+        return doc
 
     def delete_document(self, document_id: str, user_id: str) -> bool:
         """Deletes a document record, vector chunks, storage file, and invalidates AI cache."""
+        doc_model = _in_memory_documents.get(document_id) or self.get_document(document_id, user_id)
+
+        # 0. Track deleted ID immediately to block resurrecting
+        _mark_document_deleted(document_id)
+
         from .cache_service import get_ai_cache_service
         get_ai_cache_service().invalidate_document_cache(document_id=document_id, user_id=user_id)
 
-        doc_model = self.get_document(document_id, user_id)
+        # 1. Instant in-memory purge
+        _in_memory_documents.pop(document_id, None)
 
-        if self.firestore_db:
-            def _del():
-                self.firestore_db.collection("documents").document(document_id).delete()
-
-            _run_with_timeout(_del, timeout_sec=2.5)
-
-        if document_id in _in_memory_documents:
-            del _in_memory_documents[document_id]
-
+        # 2. Fast local disk directory removal
         try:
-            upload_dir = os.path.join(os.getcwd(), "uploads", user_id, document_id)
-            if os.path.exists(upload_dir):
-                shutil.rmtree(upload_dir, ignore_errors=True)
-                logger.info(f"Deleted local uploads folder: {upload_dir}")
+            for root_dir in _get_uploads_roots():
+                candidates = [
+                    os.path.join(root_dir, user_id, document_id) if user_id else None,
+                    os.path.join(root_dir, document_id)
+                ]
+                for upload_dir in candidates:
+                    if upload_dir and os.path.exists(upload_dir):
+                        try:
+                            shutil.rmtree(upload_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        if os.path.exists(upload_dir):
+                            # On Windows, locked files can be renamed so they are not discovered
+                            try:
+                                temp_del = upload_dir + f"_deleted_{int(time.time())}"
+                                os.rename(upload_dir, temp_del)
+                                shutil.rmtree(temp_del, ignore_errors=True)
+                            except Exception:
+                                pass
+                        logger.info(f"Deleted local uploads folder: {upload_dir}")
         except Exception as disk_err:
             logger.warning(f"Error deleting local upload directory: {str(disk_err)}")
 
-        if self.storage_bucket and doc_model and doc_model.fileName:
-            try:
-                blob_path = f"documents/{user_id}/{document_id}/{doc_model.fileName}"
-                blob = self.storage_bucket.blob(blob_path)
-                if blob.exists():
-                    blob.delete()
-                    logger.info(f"Deleted Firebase Storage blob: {blob_path}")
-            except Exception as storage_err:
-                logger.warning(f"Error deleting Firebase Storage blob: {str(storage_err)}")
+        # 3. Fast ChromaDB vector chunk removal
+        try:
+            self.vector_service.delete_document(document_id=document_id, user_id=user_id)
+        except Exception as vec_err:
+            logger.warning(f"Error deleting vector chunks: {str(vec_err)}")
 
-        self.vector_service.delete_document(document_id=document_id, user_id=user_id)
+        # 4. Cloud cleanup (documents and reports collections in Firestore)
+        if self.firestore_db:
+            try:
+                self.firestore_db.collection("documents").document(document_id).delete()
+                self.firestore_db.collection("reports").document(document_id).delete()
+            except Exception as e:
+                logger.debug(f"Firestore delete note: {e}")
+
+        def _async_storage_delete():
+            if self.storage_bucket and doc_model and doc_model.fileName:
+                try:
+                    blob_path = f"documents/{user_id}/{document_id}/{doc_model.fileName}"
+                    blob = self.storage_bucket.blob(blob_path)
+                    if blob.exists():
+                        blob.delete()
+                        logger.info(f"Deleted Firebase Storage blob: {blob_path}")
+                except Exception as storage_err:
+                    logger.debug(f"Firebase Storage blob delete note: {storage_err}")
+
+        threading.Thread(target=_async_storage_delete, daemon=True).start()
         return True
 
     def get_document_file_path(self, document_id: str, user_id: str) -> Optional[str]:
         """Locates the full filesystem path of an uploaded document file for an authenticated user."""
+        if not document_id or document_id in _deleted_documents:
+            return None
         doc = self.get_document(document_id, user_id)
         upload_roots = _get_uploads_roots()
         for root_dir in upload_roots:
-            user_doc_dir = os.path.join(root_dir, user_id, document_id)
-            if os.path.exists(user_doc_dir):
-                files = [f for f in os.listdir(user_doc_dir) if any(f.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)]
-                if files:
-                    return os.path.join(user_doc_dir, files[0])
+            candidates = []
+            if user_id:
+                candidates.append(os.path.join(root_dir, user_id, document_id))
+            candidates.append(os.path.join(root_dir, document_id))
+
+            for user_doc_dir in candidates:
+                if os.path.exists(user_doc_dir):
+                    if doc and doc.fileName:
+                        exact_file = os.path.join(user_doc_dir, doc.fileName)
+                        if os.path.exists(exact_file):
+                            return exact_file
+
+                    files = [
+                        f for f in os.listdir(user_doc_dir)
+                        if f.lower() not in SYSTEM_AUXILIARY_FILES
+                        and not f.startswith(".")
+                        and any(f.lower().endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+                    ]
+                    if files:
+                        files.sort(key=lambda x: (x.lower().endswith(".json"), x.lower()))
+                        return os.path.join(user_doc_dir, files[0])
         return None
 
     def _store_file(
@@ -658,25 +889,40 @@ class DocumentService:
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
 
                 page_count = len(doc)
-                raw_meta = doc.metadata or {}
+                raw_meta = {str(k): (str(v) if v is not None else "") for k, v in (doc.metadata or {}).items()}
 
                 sample_text = ""
-                for i in range(min(6, page_count)):
-                    sample_text += doc[i].get_text("text") + "\n"
+                for p_idx in range(min(5, len(doc))):
+                    sample_text += (doc[p_idx].get_text() or "") + "\n"
 
-                if "Tata Consultancy Services" in sample_text or "TCS" in filename.upper():
+                sample_upper = sample_text.upper()
+                meta_title = str(raw_meta.get("title", "") or raw_meta.get("Title", "")).strip()
+
+                if "TATA CONSULTANCY SERVICES" in sample_upper or "TCS" in filename.upper() or "TCS" in meta_title.upper():
                     company_name = "Tata Consultancy Services Limited"
-                elif "Infosys" in sample_text or "INFY" in filename.upper():
+                elif "INFOSYS" in sample_upper or "INFY" in filename.upper() or "INFOSYS" in meta_title.upper():
                     company_name = "Infosys Limited"
-                elif "Reliance Industries" in sample_text or "RELIANCE" in filename.upper():
+                elif "RELIANCE INDUSTRIES" in sample_upper or "RELIANCE" in filename.upper():
                     company_name = "Reliance Industries Limited"
+                elif "HDFC BANK" in sample_upper:
+                    company_name = "HDFC Bank Limited"
+                elif "ICICI BANK" in sample_upper:
+                    company_name = "ICICI Bank Limited"
+
+                if not company_name and meta_title and len(meta_title) > 3 and not any(term in meta_title.lower() for term in ["untitled", "report.pdf", "microsoft word"]):
+                    company_name = meta_title
 
                 if not company_name:
-                    m_comp = re.search(r"([A-Z][A-Za-z0-9\s,&.-]+(?:Limited|Ltd|Corporation|Corp|Inc|LLC|Pvt|Bank))", sample_text, re.IGNORECASE)
-                    if m_comp:
-                        candidate = m_comp.group(1).strip()
-                        if candidate.lower() not in ("annual report", "financial statements", "independent auditor"):
-                            company_name = candidate
+                    # Scan line by line to NEVER cross newlines or capture TOC blocks
+                    for line in sample_text.splitlines():
+                        line_clean = line.strip()
+                        if 4 <= len(line_clean) <= 60:
+                            m_comp = re.search(r"^([A-Z][A-Za-z0-9 ,&.-]{2,50}\s+(?:Limited|Ltd\.?|Corporation|Corp\.?|Inc\.?|LLC|Pvt\.?|Bank))$", line_clean, re.IGNORECASE)
+                            if m_comp:
+                                cand = m_comp.group(1).strip()
+                                if cand.lower() not in ("annual report", "financial statements", "independent auditor", "management discussion", "corporate governance"):
+                                    company_name = cand
+                                    break
 
                 fy_match = re.search(r"(?:fiscal year ended|period ended|ended|year ended)\s+[a-zA-Z]+\s+\d{1,2},?\s+(20\d{2})", sample_text, re.IGNORECASE)
                 if fy_match:

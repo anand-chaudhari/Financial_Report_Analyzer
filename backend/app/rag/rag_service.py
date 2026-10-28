@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator
 from ..vectorstore.vector_service import VectorStoreService
 from ..llm.llm_client import GroqLLMClient
 from .prompts import (
@@ -15,10 +15,13 @@ logger = setup_logger(__name__)
 
 class RAGService:
     """
-    Complete Grounded RAG Question-Answering Engine.
+    Complete Grounded RAG Question-Answering Engine with Structured Facts & Live Web Intelligence.
     Architecture:
-    User Question -> Query Embedding -> ChromaDB Retrieval -> Relevant Chunks
-    -> Context Construction -> Groq LLM (system + user roles) -> Natural Analyst Answer -> Sources
+    User Question -> Hybrid Search (ChromaDB Dense + BM25 Lexical) -> Relevant Chunks
+    -> Injects Structured Knowledge Card (OKF Audited Numbers)
+    -> Optional Live Web Search & Real-Time Stock Quote Context
+    -> Groq / NVIDIA / Gemini Multi-Provider LLM
+    -> Token Streaming & Verified Citations
     """
 
     def __init__(
@@ -36,6 +39,10 @@ class RAGService:
             self.document_service = document_service
         self.llm_client = llm_client or GroqLLMClient()
         self.nvidia_client = nvidia_client
+        from ..services.knowledge_card_service import KnowledgeCardService
+        self.knowledge_card_service = KnowledgeCardService(document_service=self.document_service)
+        from ..services.web_search_service import get_web_search_service
+        self.web_search_service = get_web_search_service()
 
     def validate_document_access(self, user_id: str, document_id: str) -> bool:
         """
@@ -103,55 +110,28 @@ class RAGService:
                 unique.append(c)
         return unique
 
-    def answer_question(
+    def _retrieve_and_build_context(
         self,
         user_id: str,
         document_id: str,
         question: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         top_k: Optional[int] = None,
+        use_web_search: bool = False,
     ) -> Dict[str, Any]:
         """
-        Executes full precision financial RAG query process:
+        Shared retrieval and context assembly pipeline:
         1. Validates document vector presence
-        2. Financial domain synonym expansion & multi-query retrieval
-        3. Context window expansion for primary table pages
-        4. NVIDIA semantic reranking if available
-        5. Sends formatted evidence to LLM with financial accuracy prompt
-        6. Returns structured answer with verified sources
+        2. Financial domain synonym query expansion
+        3. ChromaDB vector retrieval + BM25 keyword re-ranking
+        4. Structured Knowledge Card injection (OKF facts)
+        5. Optional Web Search & Stock Quote enrichment
         """
-        logger.info(f"RAG Engine query for User '{user_id}', Doc '{document_id}': {question}")
-        try:
-            return self._answer_question_inner(
-                user_id=user_id,
-                document_id=document_id,
-                question=question,
-                conversation_history=conversation_history,
-                top_k=top_k,
-            )
-        except Exception as rag_err:
-            logger.error(f"RAG pipeline error: {str(rag_err)}", exc_info=True)
-            return {
-                "answer": "I encountered an issue retrieving data from your financial report. Please try rephrasing your question.",
-                "sources": [],
-                "pages": [],
-                "sections": [],
-                "retrieved_chunks": [],
-            }
-
-    def _answer_question_inner(
-        self,
-        user_id: str,
-        document_id: str,
-        question: str,
-        conversation_history: Optional[List[Dict[str, Any]]] = None,
-        top_k: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Inner RAG pipeline with high-precision financial metric routing and verification."""
-        # 1. Ensure Document Vectors Exist in ChromaDB
         self.validate_document_access(user_id=user_id, document_id=document_id)
+        doc = self.document_service.get_document(document_id, user_id)
+        company_name = getattr(doc, "companyName", None) if doc else "Corporate Entity"
+        ticker = getattr(doc, "ticker", None) if doc else None
 
-        # 2. Vector Search (Primary query with financial synonyms & section markers)
         search_query = question.strip()
         q_lower = search_query.lower()
 
@@ -178,8 +158,6 @@ class RAGService:
             search_query = f"{question} Financial year Fiscal year Ended 31st March Annual report Statement of accounts"
 
         k_results = top_k or 10
-        logger.info(f"RAG Retrieval -> Query: '{question}' | Expanded: '{search_query}' | Doc: '{document_id}' | Top K: {k_results}")
-
         retrieved_chunks = self.vector_service.search(
             query_text=search_query,
             user_id=user_id,
@@ -201,20 +179,25 @@ class RAGService:
                     retrieved_chunks.append(oc)
                     seen_chunk_ids.add(oc.get("chunk_id"))
 
-        if not retrieved_chunks:
-            logger.warning(f"RAG: Zero vector chunks found for doc '{document_id}'.")
-            return {
-                "answer": NO_INFORMATION_FALLBACK_RESPONSE,
-                "sources": [],
-                "pages": [],
-                "sections": [],
-                "retrieved_chunks": [],
-            }
-
-        # 3. Deduplicate chunks
         unique_chunks = self._deduplicate_chunks(retrieved_chunks)
 
-        # 3B. NVIDIA Semantic Reranking (POST /v1/ranking with nvidia/llama-3.2-nv-rerankqa-1b-v2)
+        # BM25 Lexical Keyword Re-Ranking (elevate exact note numbers, line items, and formulas)
+        try:
+            from rank_bm25 import BM25Okapi
+            tokenized_corpus = [(c.get("text", "")).lower().split() for c in unique_chunks]
+            tokenized_query = search_query.lower().split()
+            if tokenized_corpus and tokenized_query:
+                bm25 = BM25Okapi(tokenized_corpus)
+                bm25_scores = bm25.get_scores(tokenized_query)
+                for idx, c in enumerate(unique_chunks):
+                    orig_score = float(c.get("similarity_score", 0.5))
+                    bm_val = float(bm25_scores[idx]) if idx < len(bm25_scores) else 0.0
+                    c["hybrid_score"] = orig_score + (0.15 * min(bm_val, 10.0))
+                unique_chunks.sort(key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
+        except Exception as bm_err:
+            logger.debug(f"BM25 hybrid ranking notice: {str(bm_err)}")
+
+        # NVIDIA Semantic Reranker pass if available
         try:
             nv_client = self.nvidia_client
             if nv_client is None and os.getenv("NVIDIA_API_KEY"):
@@ -232,100 +215,242 @@ class RAGService:
                             chunk_copy["rerank_score"] = r_item.get("logit", 0.0)
                             reranked_chunks.append(chunk_copy)
                     if reranked_chunks:
-                        logger.info(f"NVIDIA Reranker re-ordered {len(reranked_chunks)} chunks for query: '{question}'")
                         unique_chunks = reranked_chunks
         except Exception as rank_err:
-            logger.debug(f"NVIDIA reranker pass note: {str(rank_err)}")
-        
-        # Detailed Debug Log of Retrieved Evidence
-        logger.info(f"=== RAG RETRIEVAL DEBUG ===")
-        logger.info(f"User Query: {question}")
-        logger.info(f"Retrieved Chunks Count: {len(unique_chunks)}")
-        for idx, ch in enumerate(unique_chunks, 1):
-            p = ch.get("page_number", "?")
-            sec = ch.get("section", "General")
-            score = ch.get("similarity_score", 0.0)
-            snippet = (ch.get("text", "")[:120]).replace("\n", " ")
-            logger.info(f"  Chunk {idx}: Page {p} | Score: {score} | Section: {sec} | Preview: {snippet}...")
+            logger.debug(f"NVIDIA reranker note: {str(rank_err)}")
 
-        # 4. Collect Metadata Lists
+        # Retrieve Structured Knowledge Card (OKF Facts)
+        k_card_text = ""
+        try:
+            k_card = self.knowledge_card_service.build_or_get_knowledge_card(document_id, user_id)
+            k_card_text = self.knowledge_card_service.format_card_for_prompt(k_card)
+        except Exception as k_err:
+            logger.warning(f"Knowledge Card notice for doc '{document_id}': {str(k_err)}")
+
+        # Retrieve Live Web & Real-Time Stock Intelligence if requested
+        web_text = ""
+        web_sources = []
+        market_data = None
+        if use_web_search:
+            try:
+                target_company = company_name
+                target_ticker = ticker
+                query_ticker = self.web_search_service.resolve_ticker(question)
+                if query_ticker:
+                    target_ticker = query_ticker
+                    from ..services.web_search_service import POPULAR_TICKER_MAP
+                    for k, sym in POPULAR_TICKER_MAP.items():
+                        if sym == query_ticker and k in question.lower():
+                            target_company = k.title()
+                            break
+                    if not target_company or target_company == company_name:
+                        target_company = query_ticker.split(".")[0]
+
+                web_text = self.web_search_service.format_web_intelligence_context(
+                    company_name=target_company,
+                    query=question,
+                    ticker=target_ticker
+                )
+                web_sources = self.web_search_service.search_company_web(target_company, question, max_results=3)
+                market_data = self.web_search_service.get_company_stock_quote(target_company, target_ticker)
+            except Exception as w_err:
+                logger.warning(f"Web intelligence pass notice: {str(w_err)}")
+
+        # Assemble Hierarchical Evidence
+        formatted_chunks = self._format_context(unique_chunks)
+        formatted_history = self._format_history(conversation_history)
+
+        context_blocks = []
+        if formatted_chunks:
+            context_blocks.append(f"--- PRIMARY DOCUMENT EVIDENCE (FINANCIAL STATEMENTS & TABLES) ---\n{formatted_chunks}")
+        if k_card_text:
+            context_blocks.append(f"--- OVERVIEW KNOWLEDGE CARD (SUMMARY) ---\n{k_card_text}")
+        if web_text:
+            context_blocks.append(web_text)
+
+        full_context = "\n\n".join(context_blocks)
+
+        user_turn = FINSIGHT_USER_TURN_TEMPLATE.format(
+            context=full_context,
+            history=formatted_history,
+            question=question,
+        )
+
+        # Collect verified page & section metadata
         page_set = set()
         section_set = set()
+        valid_sources = []
+        verified_sections = []
+        verified_chunks = []
 
         for chunk in unique_chunks:
-            page_no = chunk.get("page_number")
-            if page_no is not None:
+            p_no = chunk.get("page_number")
+            if p_no is not None:
                 try:
-                    page_set.add(int(page_no))
+                    page_set.add(int(p_no))
                 except (ValueError, TypeError):
                     pass
             sec = chunk.get("section")
             if sec:
                 section_set.add(str(sec).strip())
 
-        sorted_pages = sorted(list(page_set))
-        sorted_sections = sorted(list(section_set))
-
-        # 5. Build clearly labeled evidence context
-        formatted_context = self._format_context(unique_chunks)
-        formatted_history = self._format_history(conversation_history)
-
-        logger.info(f"=== RAG CONTEXT SENT TO LLM ({len(formatted_context)} chars, Pages: {sorted_pages}) ===")
-
-        # 6. Compose user turn message
-        user_turn = FINSIGHT_USER_TURN_TEMPLATE.format(
-            context=formatted_context,
-            history=formatted_history,
-            question=question,
-        )
-
-        # 7. Send to LLM with precision grounded RAG context
-        raw_answer = self.llm_client.generate(
-            prompt=user_turn,
-            system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
-            temperature=0.15,
-            max_tokens=2048,
-        )
-
-        # Post-process answer to replace any residual internal tokens:
-        # e.g. "Evidence 7 / svgPage 291" -> "Source: Page 291 — Financial Statement"
-        clean_answer = raw_answer
-        clean_answer = re.sub(r"Evidence\s*\d+\s*(?:/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)", r"Source: Page \1", clean_answer, flags=re.IGNORECASE)
-        clean_answer = re.sub(r"svgPage\s*(\d+)", r"Page \1", clean_answer, flags=re.IGNORECASE)
-        clean_answer = re.sub(r"\[Evidence\s*\d+\]", "", clean_answer, flags=re.IGNORECASE)
-
-        # 8. Evidence-Based Citation Verification: Only cite pages that actually support the answer
-        is_fallback_or_error = any(
-            phrase in clean_answer.lower()
-            for phrase in ("could not find enough information", "couldn't find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
-        )
-
-        valid_pages: List[int] = []
-        valid_sources: List[str] = []
-        verified_sections: List[str] = []
-        verified_chunks: List[Dict[str, Any]] = []
-
-        if not is_fallback_or_error:
-            # Check if any chunk source_location is explicitly mentioned or relevant
-            for c in unique_chunks[:4]:
-                loc_lbl = c.get("source_location") or f"Page {c.get('page_number', 1)}"
-                sec_name = c.get("section", "Financial Statement")
-                src_entry = f"Source: {loc_lbl} — {sec_name}"
-                if src_entry not in valid_sources:
-                    valid_sources.append(src_entry)
-                    verified_sections.append(sec_name)
-                    verified_chunks.append(c)
-                if c.get("page_number") and c.get("page_number") not in valid_pages:
-                    valid_pages.append(c.get("page_number"))
-
-            valid_pages.sort()
-
-        logger.info(f"RAG Generated Answer: {len(clean_answer)} chars | Verified Sources: {valid_sources}")
+        for c in unique_chunks[:4]:
+            loc_lbl = c.get("source_location") or f"Page {c.get('page_number', 1)}"
+            sec_name = c.get("section", "Financial Statement")
+            src_entry = f"Source: {loc_lbl} — {sec_name}"
+            if src_entry not in valid_sources:
+                valid_sources.append(src_entry)
+                verified_sections.append(sec_name)
+                verified_chunks.append(c)
 
         return {
-            "answer": clean_answer,
-            "sources": valid_sources,
-            "pages": valid_pages,
-            "sections": verified_sections,
-            "retrieved_chunks": verified_chunks if verified_chunks else unique_chunks,
+            "user_turn": user_turn,
+            "unique_chunks": unique_chunks,
+            "valid_sources": valid_sources,
+            "valid_pages": sorted(list(page_set)),
+            "verified_sections": verified_sections,
+            "verified_chunks": verified_chunks,
+            "web_sources": web_sources,
+            "market_data": market_data,
         }
+
+    def answer_question(
+        self,
+        user_id: str,
+        document_id: str,
+        question: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        top_k: Optional[int] = None,
+        use_web_search: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Executes full precision financial RAG query process with Knowledge Card & optional Web Search.
+        """
+        logger.info(f"RAG Engine query for User '{user_id}', Doc '{document_id}': {question} (WebSearch: {use_web_search})")
+        try:
+            bundle = self._retrieve_and_build_context(
+                user_id=user_id,
+                document_id=document_id,
+                question=question,
+                conversation_history=conversation_history,
+                top_k=top_k,
+                use_web_search=use_web_search,
+            )
+
+            raw_answer = self.llm_client.generate(
+                prompt=bundle["user_turn"],
+                system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
+                temperature=0.15,
+                max_tokens=2048,
+            )
+
+            clean_answer = raw_answer
+            clean_answer = re.sub(r"Evidence\s*\d+\s*(?:/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)", r"Source: Page \1", clean_answer, flags=re.IGNORECASE)
+            clean_answer = re.sub(r"svgPage\s*(\d+)", r"Page \1", clean_answer, flags=re.IGNORECASE)
+            clean_answer = re.sub(r"\[Evidence\s*\d+\]", "", clean_answer, flags=re.IGNORECASE)
+
+            is_fallback_or_error = any(
+                phrase in clean_answer.lower()
+                for phrase in ("could not find enough information", "couldn't find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
+            )
+
+            return {
+                "answer": clean_answer,
+                "sources": [] if is_fallback_or_error else bundle["valid_sources"],
+                "pages": [] if is_fallback_or_error else bundle["valid_pages"],
+                "sections": [] if is_fallback_or_error else bundle["verified_sections"],
+                "retrieved_chunks": [] if is_fallback_or_error else (bundle["verified_chunks"] if bundle["verified_chunks"] else bundle["unique_chunks"]),
+                "web_sources": bundle["web_sources"],
+                "market_data": bundle["market_data"],
+            }
+        except Exception as rag_err:
+            logger.error(f"RAG pipeline error: {str(rag_err)}", exc_info=True)
+            return {
+                "answer": "I encountered an issue retrieving data from your financial report. Please try rephrasing your question.",
+                "sources": [],
+                "pages": [],
+                "sections": [],
+                "retrieved_chunks": [],
+                "web_sources": [],
+                "market_data": None,
+            }
+
+    def answer_question_stream(
+        self,
+        user_id: str,
+        document_id: str,
+        question: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        top_k: Optional[int] = None,
+        use_web_search: bool = False,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Server-Sent Events (SSE) generator streaming token chunks (< 350ms TTFT).
+        Yields:
+        - {"type": "start", "sources": [...], "pages": [...], "web_sources": [...]}
+        - {"type": "token", "content": "..."}
+        - {"type": "done", "full_answer": "..."}
+        """
+        try:
+            bundle = self._retrieve_and_build_context(
+                user_id=user_id,
+                document_id=document_id,
+                question=question,
+                conversation_history=conversation_history,
+                top_k=top_k,
+                use_web_search=use_web_search,
+            )
+
+            yield {
+                "type": "start",
+                "sources": bundle["valid_sources"],
+                "pages": bundle["valid_pages"],
+                "sections": bundle["verified_sections"],
+                "web_sources": bundle["web_sources"],
+                "market_data": bundle["market_data"],
+            }
+
+            accumulated = []
+            for token in self.llm_client.generate_stream(
+                prompt=bundle["user_turn"],
+                system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
+                temperature=0.15,
+                max_tokens=2048,
+            ):
+                accumulated.append(token)
+                yield {
+                    "type": "token",
+                    "content": token,
+                }
+
+            full_raw = "".join(accumulated)
+            clean = full_raw
+            clean = re.sub(r"Evidence\s*\d+\s*(?:/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)", r"Source: Page \1", clean, flags=re.IGNORECASE)
+            clean = re.sub(r"svgPage\s*(\d+)", r"Page \1", clean, flags=re.IGNORECASE)
+            clean = re.sub(r"\[Evidence\s*\d+\]", "", clean, flags=re.IGNORECASE)
+
+            yield {
+                "type": "done",
+                "full_answer": clean,
+                "sources": bundle["valid_sources"],
+                "pages": bundle["valid_pages"],
+                "sections": bundle["verified_sections"],
+                "web_sources": bundle["web_sources"],
+                "market_data": bundle["market_data"],
+            }
+        except Exception as e:
+            logger.error(f"Error in answer_question_stream: {str(e)}", exc_info=True)
+            fallback_err = "I couldn't retrieve current information right now. Please try again."
+            yield {
+                "type": "token",
+                "content": fallback_err,
+            }
+            yield {
+                "type": "done",
+                "full_answer": fallback_err,
+                "sources": [],
+                "pages": [],
+                "sections": [],
+                "web_sources": [],
+                "market_data": None,
+            }

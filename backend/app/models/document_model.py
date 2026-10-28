@@ -17,6 +17,7 @@ class DocumentModel:
     storageUrl: str = ""
     companyName: Optional[str] = None
     financialYear: Optional[str] = None
+    ticker: Optional[str] = None
     fileSize: int = 0
     uploadedAt: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     processedAt: Optional[str] = None
@@ -30,6 +31,7 @@ class DocumentModel:
             "fileName": self.fileName,
             "companyName": self.companyName,
             "financialYear": self.financialYear,
+            "ticker": self.ticker,
             "pageCount": self.pageCount,
             "status": self.status,
             "currentStage": self.currentStage,
@@ -57,6 +59,7 @@ class DocumentModel:
             storageUrl=data.get("storageUrl", ""),
             companyName=data.get("companyName"),
             financialYear=data.get("financialYear"),
+            ticker=data.get("ticker"),
             fileSize=data.get("fileSize", 0),
             uploadedAt=data.get("uploadedAt", datetime.utcnow().isoformat()),
             processedAt=data.get("processedAt"),
