@@ -24,7 +24,9 @@
 10. [Frequently Asked Questions & Technical Interview Answers](#-frequently-asked-questions--technical-interview-answers)
 11. [License](#-license)
 
----
+---<img width="661" height="585" alt="Screenshot 2026-10-28 012827" src="https://github.com/user-attachments/assets/89a7c255-c124-4a5b-bb86-6e644fb2967a" />
+<img width="1577" height="798" alt="Screenshot 2026-10-28 120453" src="https://github.com/user-attachments/assets/57d4d01a-082f-40f8-9b4d-3fb563641c30" />
+
 
 ## 🚀 Key Innovations & What's New
 
@@ -115,7 +117,8 @@ FinSight AI processes heterogeneous corporate disclosures through a unified inte
 * Automatic column normalization and malformed row handling with non-fatal metadata warnings.
 * Batched into structured 35-row chunks with headers preserved and row-range citations (`CSV Rows 2–36`).
 
----
+---<img width="1252" height="782" alt="Screenshot 2026-10-28 131121" src="https://github.com/user-attachments/assets/9c5afa58-291e-4490-8672-a2947ec11511" />
+
 
 ## 🌟 Core Features Breakdown
 
@@ -298,6 +301,9 @@ The frontend is configured for deployment to **Firebase Hosting**:
    ```
 
 ---
+<img width="1587" height="826" alt="Screenshot 2026-10-28 120523" src="https://github.com/user-attachments/assets/ea0fe683-4509-43e7-910c-5c2fcc5b266c" />
+<img width="1553" height="865" alt="Screenshot 2026-10-28 121228" src="https://github.com/user-attachments/assets/0797fd52-e71a-476a-adfd-7e8a23fcdfe5" />
+<img width="1811" height="842" alt="Screenshot 2026-10-28 120808" src="https://github.com/user-attachments/assets/fdc1eec1-bd66-4812-a8fb-e8cc37338a11" />
 
 ## ❓ Frequently Asked Questions & Technical Interview Answers
 
