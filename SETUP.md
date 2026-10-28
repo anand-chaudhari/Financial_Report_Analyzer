@@ -27,7 +27,7 @@ Before you touch any code, make sure you have these things ready:
 When you clone the repo, you will see this:
 
 ```
-FINANCE_REPORT_ANALYZER_AI/
+Financial_Report_Analyzer/
 │
 ├── backend/          ← Python + FastAPI (the AI brain)
 │   ├── app/          ← All the backend logic
@@ -45,7 +45,9 @@ FINANCE_REPORT_ANALYZER_AI/
 │   ├── setup.ps1     ← Automated setup for Windows
 │   └── setup.sh      ← Automated setup for macOS/Linux
 │
-├── SETUP.md          ← You are reading this!
+├── PROJECT_REPORT.md   ← Academic research project report
+├── PROJECT_OVERVIEW.md ← Architectural deep-dive & feature overview
+├── SETUP.md            ← You are reading this!
 └── QUICKSTART.md     ← Short version for daily use after setup
 ```
 

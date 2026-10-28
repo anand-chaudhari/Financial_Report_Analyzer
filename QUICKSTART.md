@@ -6,9 +6,9 @@
 
 ## 📌 Summary: How FinSight AI Works on Localhost
 
-FinSight AI runs **100% locally** on your machine.
-- **Backend (FastAPI)**: Serves API requests on `http://localhost:8000` and processes 600+ page PDFs in the background using a local thread pool worker.
-- **Frontend (React + Vite)**: Displays the analyst interface on `http://localhost:5173` and polls job status in real-time.
+FinSight AI runs **100% locally** on your machine:
+- **Backend (FastAPI)**: Serves API requests on `http://localhost:8000` and processes 500+ page PDFs, Word files (DOCX), and spreadsheets (CSV/TSV) in the background using a local thread pool worker.
+- **Frontend (React + Vite)**: Displays the interactive analyst interface on `http://localhost:5173` with real-time SSE streaming and status polling.
 
 ---
 
@@ -48,7 +48,7 @@ source .venv/bin/activate
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-*  **Backend API URL**: `http://localhost:8000`
+* 📡 **Backend API URL**: `http://localhost:8000`
 * 📖 **Interactive API Specs (Swagger Docs)**: `http://localhost:8000/docs`
 
 ---
@@ -83,23 +83,26 @@ The backend uses `serviceAccountKey.json` to verify user logins.
 3. Click **"Generate new private key"** to download the JSON file.
 4. Move and rename the file to:
    ```
-   FINANCE_REPORT_ANALYZER_AI/backend/serviceAccountKey.json
+   Financial_Report_Analyzer/backend/serviceAccountKey.json
    ```
 5. Restart Terminal 1 (Backend).
 
 ---
 
-## 🧪 Testing Large PDF Uploads (600+ Pages)
+## 🧪 Testing Document Uploads (PDF, DOCX, CSV)
 
 1. Open `http://localhost:5173` in your browser and log in.
-2. Go to **Upload Report** page.
-3. Drag and drop a large financial report (e.g., 600-page annual report up to 250 MB).
+2. Go to the **Upload Report** page.
+3. Drag and drop any supported financial filing:
+   - **PDF**: SEC 10-K, 10-Q, or full 500-page annual report (up to 200 MB).
+   - **DOCX**: Executive financial reviews with headings and tables.
+   - **CSV / TSV**: Multi-year financial statements with comma or tab delimiters.
 4. Click **Process Document**.
 5. **Notice what happens**:
    - The upload completes in **under 1 second**.
-   - You are immediately redirected to **My Reports**.
-   - A live progress banner appears in the top navigation bar showing progress (`Queued` → `Analyzing` → `Extracting` → `Embedding` → `Indexing` → `Ready`).
-   - You can click around **Dashboard**, **Analytics**, **AI Analyst**, and **Settings** while processing continues in the background without any lag!
+   - You can watch the real-time progress bar: `Uploading` → `Queued` → `Analyzing` → `Extracting` → `Embedding` → `Indexing` → `Ready`.
+   - Re-uploading the same file completes **instantly (< 1 second)** due to verified vector cache fingerprinting (`v2.2.0`).
+   - You can click around **Dashboard**, **Analytics**, and **AI Analyst** while processing continues in the background without any lag!
 
 ---
 
@@ -114,8 +117,12 @@ This means Terminal 1 (Backend) is not running. Make sure Terminal 1 is active a
 INFO: Uvicorn running on http://0.0.0.0:8000
 ```
 
-### 3. Why is the first upload slightly slower?
-On the very first run, FinSight AI downloads the lightweight SentenceTransformer embedding model (`sentence-transformers/all-MiniLM-L6-v2`, ~90 MB) to your local cache. This happens only once. All subsequent uploads use the cached model.
+### 3. How do I push my changes to GitHub if permission is denied?
+If your terminal gives a permission error while pushing to GitHub, authenticate using the GitHub CLI:
+```bash
+gh auth login
+```
+Select `GitHub.com` → `HTTPS` → `Login with a web browser` → authorize with your GitHub account, then run `git push origin main`.
 
 ### 4. How do I stop both servers?
 Go to each terminal window and press **`Ctrl + C`**.

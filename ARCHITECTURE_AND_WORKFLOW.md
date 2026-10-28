@@ -1,6 +1,6 @@
 # FinSight AI — Architecture, Performance & Complete Workflow Guide
 
-FinSight AI is a production-grade, local-first Financial Report Intelligence platform powered by Retrieval-Augmented Generation (RAG). It enables financial analysts to upload massive corporate filings (10-K, 10-Q, annual reports up to 600+ pages / 200MB) and interact with them in natural, conversational language with 100% source-grounded accuracy.
+FinSight AI is an enterprise-grade, local-first Financial Report Intelligence platform powered by Retrieval-Augmented Generation (RAG). It enables financial analysts to upload massive corporate disclosures (10-K, 10-Q, annual reports up to **500+ pages / 200MB**, Word documents, and financial spreadsheets) and interact with them in natural, conversational language with 100% source-grounded accuracy and zero cross-document contamination.
 
 ---
 
@@ -8,24 +8,41 @@ FinSight AI is a production-grade, local-first Financial Report Intelligence pla
 
 ```mermaid
 graph TD
-    User["👤 Financial Analyst (Browser)"] -->|1. Upload 600+ Page PDF| Frontend["⚡ React + Vite Frontend"]
+    User["👤 Financial Analyst (Browser)"] -->|1. Upload PDF / DOCX / CSV| Frontend["⚡ React + Vite Frontend"]
     Frontend -->|2. POST /api/v1/documents/upload| FastAPI["🚀 FastAPI Server (Port 8000)"]
-    FastAPI -->|3. Save to Local Disk & SHA-256 Check| Disk["📁 Local Disk Storage (uploads/)"]
-    FastAPI -->|4. Return Job Record & HTTP 200 Instant| Frontend
+    FastAPI -->|3. 1MB Chunked Disk Stream + Concurrent SHA-256| Disk["📁 Local Disk Storage (uploads/)"]
     
-    FastAPI -->|5. Submit Job to Queue| Worker["⚙️ Local Background Worker Pool (ThreadPoolExecutor)"]
+    FastAPI -->|4. Check Fingerprint: doc_hash + model + v2.2.0| CacheCheck{"Existing Cache Verified?"}
+    CacheCheck -- YES --> InstantReady["⚡ Instant Return: Status READY (0ms)"]
+    InstantReady --> Frontend
+    
+    CacheCheck -- NO --> QueueJob["⚙️ Enqueue to BackgroundWorkerPool"]
+    QueueJob -->|5. Return HTTP 200 & Document Record| Frontend
     
     subgraph Background Worker Execution
-        Worker -->|6. Batch Page Extraction (PyMuPDF)| Extractor["📄 PDF Extractor"]
-        Extractor -->|7. Selective OCR (Scanned Only)| OCR["👁️ OCR Service (Gemini Vision)"]
-        OCR -->|8. Table & Layout Chunking| Chunker["🧩 Financial Chunker"]
-        Chunker -->|9. SentenceTransformers Batch Embeddings| Embedder["🧠 SentenceTransformers (all-MiniLM-L6-v2)"]
-        Embedder -->|10. Incremental Batch Upsert| ChromaDB["🗄️ ChromaDB Vector Database"]
+        QueueJob --> FormatRouter{"Format Router"}
+        FormatRouter -- .pdf --> PyMuPDF["📄 PDF Extractor (Batch=30, PyMuPDF)"]
+        PyMuPDF --> SelectiveOCR{"Chars < 20?"}
+        SelectiveOCR -- Yes --> VisionOCR["👁️ Gemini 2.0 Flash Vision OCR"]
+        SelectiveOCR -- No --> UnifiedDoc["📋 Unified ExtractedDocument"]
+        VisionOCR --> UnifiedDoc
+        
+        FormatRouter -- .docx --> DocxExtractor["📝 Word Extractor (Interleaved w:p & w:tbl)"]
+        DocxExtractor --> UnifiedDoc
+        
+        FormatRouter -- .csv/.tsv --> CSVExtractor["📊 CSV Extractor (Delimiter Sniffer + 35-Row Chunks)"]
+        CSVExtractor --> UnifiedDoc
+        
+        UnifiedDoc --> Chunker["🧩 Table-Aware Chunker (Prepends Table Headers)"]
+        Chunker --> Embedder["🧠 BAAI/bge-small-en-v1.5 Dense Embeddings (384-dim)"]
+        Embedder --> ChromaDB["🗄️ ChromaDB Vector Store (Scoped by document_id)"]
+        ChromaDB --> Verify["✅ Vector Persistence Verification"]
+        Verify --> ReadyState["Status = COMPLETED, Stage = READY"]
     end
 
-    Frontend -->|11. Poll GET /status (3s)| FastAPI
-    FastAPI -->|12. Return Real-Time Progress 0-100%| Frontend
-    Worker -->|13. Status = READY| Firestore["🔥 Firestore Document Status"]
+    Frontend -->|6. Poll GET /status (1.5s)| FastAPI
+    FastAPI -->|7. Real-time Progress (0-100%)| Frontend
+    ReadyState -->|8. Document Ready| Frontend
 ```
 
 ---
@@ -34,95 +51,91 @@ graph TD
 
 ```mermaid
 graph TD
-    Analyst["💬 Analyst Asks Question"] -->|POST /api/v1/chat| ChatRoute["API Route /chat"]
-    ChatRoute -->|Resolve Document ID| ChatService["Chat Service"]
-    ChatService -->|Query Similarity| VectorService["ChromaDB Vector Store"]
+    Analyst["💬 Analyst Asks Question"] -->|POST /api/v1/chat/stream| ChatRoute["API Route /chat/stream"]
+    ChatRoute -->|Resolve document_id & user_id| RAGService["RAG Service"]
     
-    VectorService -->|Strict Filter: document_id| ChromaDB["🗄️ ChromaDB Collection"]
-    ChromaDB -->|Return Top 8 Relevant Chunks| VectorService
+    RAGService -->|Query Similarity| VectorService["ChromaDB Vector Store"]
+    VectorService -->|Strict Filter: document_id (Zero Bleed)| ChromaDB["🗄️ ChromaDB Collection"]
+    ChromaDB -->|Return Top-15 Candidate Chunks| VectorService
     
-    VectorService -->|Format Labeled Evidence Blocks| RAGEngine["RAG Engine"]
-    RAGEngine -->|Construct System Persona + Context| GroqLLM["🤖 Groq LLM (llama-3.3-70b-versatile)"]
+    VectorService -->|Apply Keyword BM25 & Table Priority Boost| RAGService
+    RAGService -->|Format Context: Primary Document Evidence First| PromptBuilder["Context Assembly"]
+    PromptBuilder -->|Inject Evidence + System Persona| GroqLLM["🤖 Groq LLM (Llama 3.3 70B Versatile)"]
     
-    GroqLLM -->|Generate Natural Humanic Answer| RAGEngine
-    RAGEngine -->|Attach Bottom Sources & Pages| ChatService
-    ChatService -->|Persist Thread & Message| Firestore["🔥 Firestore Database"]
-    ChatService -->|HTTP 200 ChatResponse| Analyst
+    loop Server-Sent Events (SSE)
+        GroqLLM -->|Stream Token Delta| ChatRoute
+        ChatRoute -->|SSE Event: data: {token: ...}| Frontend["⚡ Split-View Chat UI"]
+    end
+    
+    GroqLLM -->|Stream Complete| ChatRoute
+    ChatRoute -->|SSE Event: [DONE] with Citations| Frontend
+    ChatRoute -->|Persist Thread & Message| Storage["🔥 Firestore / Local Storage"]
 ```
 
 ---
 
 ## 3. Core Architectural Principles & Optimizations
 
-### A. Non-Blocking Fast Upload (< 1 Second Response)
-- **Problem**: Previously, uploading a 600-page PDF waited for PDF parsing, OCR, vector embedding, and ChromaDB insertion inside the single HTTP request, causing 300,000ms timeouts (`AxiosError: timeout exceeded`).
-- **Solution**: The `POST /api/v1/documents/upload` endpoint performs **only lightweight pre-flight operations**:
-  1. Authenticates the Firebase user.
-  2. Streams file directly to local disk (`uploads/<user_id>/<document_id>/filename.pdf`) in 1MB chunks to keep RAM usage flat.
-  3. Computes SHA-256 hash. If an identical file was previously indexed, it instantly reuses the indexed vectors.
-  4. Creates the document record with `status="processing"` and `currentStage="Queued"`.
-  5. Offloads the heavy extraction to `submit_background_processing()` on a dedicated background worker pool.
-  6. **Returns HTTP 200 OK immediately** (< 1 second) with the `document_id`.
+### A. Zero-Memory 1 MB Chunked Streaming Upload
+- **Problem**: Uploading a 200 MB annual report using standard `UploadFile.read()` loads the entire file into a RAM byte buffer. Under multiple concurrent uploads, this triggers out-of-memory crashes.
+- **Solution**: The `POST /api/v1/documents/upload` endpoint streams incoming files directly to disk in **1 MB chunk buffers**:
+  ```python
+  hasher = hashlib.sha256()
+  with open(temp_file_path, "wb") as f_out:
+      while True:
+          chunk = await file.read(1024 * 1024)
+          if not chunk:
+              break
+          f_out.write(chunk)
+          hasher.update(chunk)
+  computed_hash = hasher.hexdigest()
+  ```
+  This keeps memory consumption flat at **1 MB**, while concurrently calculating the SHA-256 hash without requiring a second disk read.
+
+### B. Table-Aware Chunking with Header Retention
+- **Problem**: When a 60-row financial statement is split across chunk boundaries, sub-chunks lose their column headers (e.g. `FY22 | FY23 | FY24`), causing the LLM to hallucinate or misalign numbers.
+- **Solution**: The chunker detects Markdown table blocks and automatically prepends the header row and separator line (`| Metric | FY23 | FY24 |\n|---|---|---|`) to every sub-chunk. Numerical disclosures are never severed from their column definitions.
+
+### C. Elimination of Cross-Document Semantic Bleed
+- **Problem**: When searching documents with sparse embeddings, standard RAG fallbacks drop the `document_id` filter and query across all user documents, causing data from one company (e.g. SBI) to bleed into queries for another company (e.g. Apple).
+- **Solution**: FinSight AI strictly constrains ChromaDB vector queries:
+  ```python
+  where_filter = {"$and": [{"user_id": user_id}, {"document_id": document_id}]}
+  ```
+  Queries with a specified `document_id` never fall back to unfiltered searches.
+
+### D. Deterministic Vector Cache Fingerprinting (`v2.2.0`)
+- **Problem**: Analysts frequently re-upload the same report during research, causing redundant re-indexing and token consumption.
+- **Solution**: Constructs a pipeline cache key:
+  $$\text{Fingerprint} = \text{SHA256}(\text{File}) + \text{EmbeddingModel} + \text{PipelineVersion}$$
+  If this fingerprint matches an existing indexed document and ChromaDB vector persistence is verified, the document is immediately marked `Ready` in **0 ms**.
+
+### E. Selective Page-Level Multimodal OCR
+- **Problem**: Running OCR on every page of a 500-page digital filing is slow and costly. Conversely, sampling a few pages risk missing scanned appendices.
+- **Solution**: Evaluates every page individually:
+  - If native character count $\ge 20$: Extracts text via **PyMuPDF** at C-speed.
+  - If native character count $< 20$ and images are detected: Activates **Google Gemini 2.0 Flash Vision** exclusively on that page.
+  - Pages exceeding the OCR budget are flagged in `unprocessed_ocr_pages` metadata rather than silently discarded.
 
 ---
 
-### B. Local Background Worker Thread Pool
-- Heavy PDF extraction, OCR, sentence embeddings, and ChromaDB writes run on a dedicated Python `ThreadPoolExecutor(max_workers=2)`.
-- This isolates CPU-bound processing from FastAPI's main async HTTP event loop.
-- **Result**: While a 600+ page PDF is being indexed, normal API requests (`GET /dashboard`, `GET /reports`, `GET /conversations`, `GET /analytics`) respond instantly (< 50ms) without lagging.
+## 4. End-to-End Ingestion Stages
+
+| Stage Name | Progress % | Operation Description |
+| :--- | :--- | :--- |
+| **Uploading** | 0% – 20% | 1 MB chunked stream from client to server disk storage. |
+| **Queued** | 20% – 25% | Pre-flight validation, magic-byte format detection, worker queue assignment. |
+| **Analyzing** | 25% – 35% | Document structure inspection, page-level character density profiling. |
+| **Extracting** | 35% – 55% | Native text & table extraction across PDF, DOCX, or CSV extractors. |
+| **OCR** | 55% – 65% | Targeted Gemini Vision OCR on scanned or image-only pages. |
+| **Chunking** | 65% – 75% | Table-aware Markdown splitting with column header preservation. |
+| **Embedding** | 75% – 90% | Batched dense vector generation via BAAI/bge-small-en-v1.5. |
+| **Indexing** | 90% – 98% | ChromaDB HNSW upsert, metadata indexing, and persistence verification. |
+| **Ready** | 100% | Document indexing complete; interactive RAG analysis enabled. |
 
 ---
 
-### C. Selective OCR Engine
-- Does **NOT** run OCR on every page.
-- Native text extraction (via PyMuPDF `fitz`) is attempted first.
-- If a page has sufficient native text (> 40 characters), OCR is skipped.
-- OCR runs **only on verified scanned image-only pages**, saving up to 95% of unnecessary API calls.
+## 5. Failure Recovery & Background Idempotency
 
----
-
-### D. Memory-Controlled Batching (20 Pages / Batch)
-- 600-page filings are extracted and chunked in controlled batches of 20 pages.
-- SentenceTransformer embeddings are generated in batches of 32 chunks.
-- Vector upserts to ChromaDB are committed in batches of 250 chunks.
-- Memory garbage collection (`gc.collect()`) runs between batches to prevent RAM buildup on developer machines.
-
----
-
-### E. Frontend Navigation Independence & Status Polling
-- When a document is uploaded, the frontend receives the `document_id` and unlocks immediately.
-- The user can navigate to **Dashboard**, **My Reports**, **AI Analyst**, **Compare Filings**, **Analytics**, or **Settings** while processing continues in the background.
-- `ReportContext.tsx` maintains a non-blocking 3-second status polling loop (`GET /api/v1/documents/{document_id}/status`) that updates progress bars (`0-100%`) in real-time across the app header banner.
-
----
-
-## 4. End-to-End Execution Sequence
-
-1. **User Uploads PDF**: Selected PDF is sent to `POST /api/v1/documents/upload`.
-2. **File Streamed to Disk**: Saved to `uploads/<user_id>/<document_id>/<filename>`.
-3. **Instant HTTP Response**: Server responds with `status="processing"`, `progressPercent=5`.
-4. **Background Task Enqueued**: Worker starts `process_document_background`.
-5. **Pre-flight & Extraction**:
-   - `Analyzing` (15%): PyMuPDF inspects layout, page count, and table density.
-   - `Extracting` (30%): Text & tables extracted in 20-page batches.
-   - `OCR` (45%): Applied only to scanned image-only pages.
-   - `Chunking` (60%): Text split into 800-character semantic chunks with overlap.
-   - `Embedding` (75%): `all-MiniLM-L6-v2` computes 384-dimensional vector embeddings.
-   - `Indexing` (90%): Upserted into ChromaDB with `document_id` and `user_id` metadata.
-   - `Ready` (100%): Document marked `status="completed"`.
-6. **Grounded Q&A**: User questions are answered by retrieving top vector matches from ChromaDB and synthesizing natural analyst responses using Groq's `llama-3.3-70b-versatile` LLM. Page citations are appended cleanly at the bottom (`Sources: Page 4, Page 12`).
-
----
-
-## 5. Summary of Key Files
-
-| Module | File Path | Function |
-|---|---|---|
-| **Background Queue** | `backend/app/services/background_worker.py` | Local threadpool worker queue for non-blocking execution |
-| **Document Service** | `backend/app/services/document_service.py` | Disk storage, SHA-256 hash reuse, stage tracking, background pipeline |
-| **Upload API** | `backend/app/routes/documents.py` | Instant non-blocking HTTP upload endpoint & status polling API |
-| **PDF Extractor** | `backend/app/document_processing/pdf_extractor.py` | Pre-flight inspection & batched page extraction |
-| **Vector Engine** | `backend/app/vectorstore/vector_service.py` | SentenceTransformers embedding generation & ChromaDB indexing |
-| **RAG Engine** | `backend/app/rag/rag_service.py` | Evidence retrieval, multi-query expansion, Groq LLM synthesis |
-| **Frontend State** | `frontend/src/context/ReportContext.tsx` | Global report state, non-blocking upload, background status polling |
-| **Header Progress** | `frontend/src/components/Header.tsx` | Real-time background processing progress banner |
+* **Collision Prevention**: `submit_background_processing` verifies `is_job_running(target_id)` before queueing, preventing duplicate parallel processing of the same filing.
+* **One-Click Retry Endpoint**: If processing is interrupted (e.g., machine reboot), the client triggers `POST /api/v1/documents/{document_id}/retry`, which re-enqueues the saved file without requiring re-upload.
