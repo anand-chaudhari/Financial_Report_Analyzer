@@ -578,6 +578,8 @@ The implementation and experimental benchmarking were performed in the following
 | **CSV Extraction** | `backend/app/document_processing/extractors/csv_extractor.py`| Multi-encoding detection, delimiter sniffing, and 35-row structured chunking. |
 | **Chunking Engine** | `backend/app/document_processing/chunker.py`| Table-aware Markdown splitting with automated header preservation. |
 | **Vector Store** | `backend/app/vectorstore/vector_service.py`| Scoped ChromaDB operations, HNSW indexing, and cross-bleed elimination. |
+| **Intent Router** | `backend/app/services/intent_service.py` | Multi-entity query classification routing external topics to web discovery. |
+| **Live Web Discovery** | `backend/app/services/web_search_service.py`| DuckDuckGo news/text search & Yahoo Finance quotes with direct URL resolution. |
 | **RAG Synthesis** | `backend/app/rag/rag_service.py`| Context assembly prioritizing primary document evidence; Groq LLM streaming. |
 | **Analyst UI** | `frontend/src/pages/AnalystPage.tsx` | Split-view PDF workspace, SSE message consumer, and interactive chat interface. |
 | **Upload UI** | `frontend/src/pages/UploadPage.tsx` | Drag-and-drop file upload, real-time stage progress bar, and ETA calculation. |
@@ -691,6 +693,29 @@ if is_table:
         chunks.append("\n".join(sub_chunk))
 ```
 
+#### 4.5.4 Automated Web Discovery & Verifiable Source Citation Links
+```python
+# File: backend/app/services/web_search_service.py
+# Clean DuckDuckGo redirect URLs to direct destination links
+if "duckduckgo.com/l/?uddg=" in href:
+    m_uddg = re.search(r"uddg=([^&]+)", href)
+    if m_uddg:
+        try:
+            href = urllib.parse.unquote(m_uddg.group(1))
+        except Exception:
+            pass
+
+# Strict URL scheme validation and publisher extraction
+if href.startswith(("http://", "https://")):
+    publisher = urllib.parse.urlparse(href).netloc.replace("www.", "")
+    results.append({
+        "title": title,
+        "url": href,
+        "publisher": publisher,
+        "snippet": body[:320]
+    })
+```
+
 ### 4.6 Challenges and Solutions
 
 1. **Challenge 1: RAM Exhaustion on 450+ Page Annual Reports**
@@ -708,6 +733,10 @@ if is_table:
 4. **Challenge 4: Cross-Document Data Bleeding**
    - *Problem*: When querying a small CSV document that had sparse semantic embeddings, ChromaDB's fallback dropped the `document_id` filter and returned high-similarity chunks from previously uploaded PDF reports.
    - *Solution*: Removed the unconstrained fallback in `vector_service.py`. Queries specifying a `document_id` strictly search within that document.
+
+5. **Challenge 5: External Entity Hallucination & Dead-End Queries**
+   - *Problem*: Inquiries asking about peer companies (e.g. asking about HDFC Bank or TCS while viewing an SBI report) or market trends not recorded in historical filings either resulted in hallucinated figures or unhelpful "information not found" errors.
+   - *Solution*: Built an autonomous multi-entity Intent Router. Questions referencing external entities or unindexed topics trigger real-time DuckDuckGo news search and Yahoo Finance quote fetching with direct, unquoted HTTPS links, allowing analysts to independently cross-check facts.
 
 ---
 

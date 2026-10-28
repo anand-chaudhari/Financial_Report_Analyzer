@@ -37,6 +37,9 @@ FinSight AI incorporates several state-of-the-art architectural upgrades designe
 * 👁️ **Selective Page-Level OCR**: PyMuPDF native vector extraction handles digital pages at C-speed. Vision OCR (Google Gemini 2.0 Flash) is triggered **strictly on image-only pages** (< 20 native text characters), avoiding redundant API calls.
 * 🛡️ **Zero Cross-Document Semantic Bleed**: ChromaDB dense vector queries are strictly constrained to `document_id`. Multi-document tenants never cross-contaminate semantic retrieval results.
 * 🔄 **Idempotent Background Worker & Retry Endpoint**: Duplicate background tasks are rejected automatically, and a dedicated retry endpoint (`POST /api/v1/documents/{document_id}/retry`) allows one-click recovery without re-uploading files.
+* 🌐 **Automated Web Search & Multi-Entity Intent Router**: Asking about competitor companies (e.g. asking about HDFC Bank or TCS while viewing an SBI filing), upcoming IPOs (e.g. asking about Jio IPO lot price, price band, or GMP while viewing an Adani report), market share, or topics not present in the document automatically routes queries to live DuckDuckGo web search and real-time Yahoo Finance market quotes. Local PDF evidence from unrelated companies is completely excluded.
+* 🚀 **Dedicated `@websearch` Mode & Pure Web Synthesis**: Users can click the **`🚀 @websearch`** button in the chat composer or type **`@websearch <query>`** in the prompt to completely bypass local document RAG. The response is generated exclusively from live AI + Web Search with verified destination links and zero local PDF citations.
+* 🔗 **Verifiable Citation Links & Cross-Checking**: Every external response incorporates valid, clickable Markdown links (`[Publisher](https://...)`) with redirect parameters stripped, accompanied by a dedicated `### 🌐 Verified External Sources & Links` section allowing users to cross-check figures independently rather than blindly trusting AI-generated summaries.
 * 💬 **Premium Analyst Chat Workspace**: Server-Sent Events (SSE) streaming chat, split-view PDF synchronization, rich financial Markdown tables, KPI badges, and clickable page citations.
 
 ---
@@ -135,6 +138,12 @@ FinSight AI processes heterogeneous corporate disclosures through a unified inte
 - Instant one-click retry endpoint (`POST /api/v1/documents/{document_id}/retry`) for interrupted jobs.
 - User-isolated storage (`uploads/{user_id}/{document_id}/`).
 - Rate-limited upload endpoints and magic-byte format validation.
+
+### 5. 🌐 Real-Time External Web Search & Verifiable Source Links
+- **Automatic Fallback for External Queries**: When inquiries reference external companies, competitors (e.g. comparing SBI with HDFC or TCS), or metrics not present in the uploaded document, the system automatically triggers real-time web discovery.
+- **Yahoo Finance & DuckDuckGo Integration**: Live share prices, day's change percentage, market capitalization, 52-week ranges, and recent news articles are retrieved on-demand with intelligent caching (60s quote TTL, 15m search TTL).
+- **Direct, Verifiable Markdown Links**: All external citations are rendered as direct HTTPS links (`[Publisher](https://...)`) with redirect trackers stripped, allowing analysts to independently verify figures without relying blindly on generated text.
+- **Dedicated Cross-Check Section**: Responses automatically conclude with `### 🌐 Verified External Sources & Links` listing destination links for transparent auditability.
 
 ---
 
@@ -303,6 +312,9 @@ The frontend is configured for deployment to **Firebase Hosting**:
 
 ### Q4: How is cross-document semantic bleed eliminated?
 > **Answer**: In `vector_service.py`, all ChromaDB similarity queries construct a strict filter: `where={"$and": [{"user_id": user_id}, {"document_id": document_id}]}`. Generic fallbacks that drop the `document_id` filter have been eliminated. Searches for a document return chunks strictly belonging to that document ID.
+
+### Q5: What happens when a user asks about another company or information not in the report (e.g. Jio IPO)?
+> **Answer**: The FinSight AI Intent Router automatically classifies the question. If an external entity (e.g. asking about Jio IPO lot price while viewing an Adani report, or asking about HDFC Bank or TCS while viewing an SBI filing), market metric, upcoming IPO, or competitor is identified, or if the PDF chunks have zero relevance to the query, the system automatically triggers a live DuckDuckGo web search and Yahoo Finance quote fetch. In unrelated document contexts, local PDF chunks are completely excluded to eliminate false citations. Responses provide valid, clickable Markdown links (`[Publisher](https://...)`) and a dedicated `### 🌐 Verified External Sources & Links` section so users can independently verify figures without blindly trusting AI-generated summaries.
 
 ---
 

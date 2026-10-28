@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Sparkles } from 'lucide-react';
+import { Bot, Sparkles, Globe } from 'lucide-react';
 import { SourceMetadata } from '../../services/conversationService';
 import { WebSourceItem } from '../../services/chatService';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -52,9 +52,15 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
             <span className="text-[11px] font-extrabold text-slate-800 dark:text-slate-100 uppercase tracking-wider">
               FinSight AI Analyst
             </span>
-            <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-[9px] font-extrabold uppercase">
-              Grounded
-            </span>
+            {web_sources && web_sources.length > 0 && (!sources || sources.length === 0) ? (
+              <span className="px-1.5 py-0.2 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 text-[9px] font-extrabold uppercase flex items-center gap-1 border border-purple-500/20">
+                <Globe className="w-2.5 h-2.5" /> Web Search
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-[9px] font-extrabold uppercase">
+                Grounded
+              </span>
+            )}
           </div>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">
             {timestamp}

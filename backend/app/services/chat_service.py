@@ -66,9 +66,10 @@ class ChatService:
         self.web_search_service = get_web_search_service()
 
     def _resolve_effective_mode(self, search_mode: Optional[str] = None, use_web_search: Optional[bool] = None) -> str:
-        """Resolves effective search mode between 'auto', 'on', and 'off'."""
-        if search_mode and str(search_mode).strip().lower() in ("auto", "on", "off"):
-            return str(search_mode).strip().lower()
+        """Resolves effective search mode between 'auto', 'on', 'off', and 'web_only'."""
+        if search_mode and str(search_mode).strip().lower() in ("auto", "on", "off", "web_only", "@websearch"):
+            val = str(search_mode).strip().lower()
+            return "web_only" if val in ("web_only", "@websearch") else val
         if use_web_search is True:
             return "on"
         if use_web_search is False:
@@ -81,11 +82,13 @@ class ChatService:
         has_active_doc: bool,
         history: List[Dict[str, Any]],
         search_mode: str = "auto",
+        active_company_name: Optional[str] = None,
     ) -> tuple[str, bool]:
         """Classifies inquiry intent and returns (intent_category, should_web_search)."""
         return self.intent_router.classify(
             question=question,
             has_active_doc=has_active_doc,
+            active_company_name=active_company_name,
             history=history,
             search_mode=search_mode,
         )
@@ -175,15 +178,89 @@ class ChatService:
             history_to_supply = conversation_history
 
         # 4. Classify Intent & Decide Web Search
+        active_company_name = ""
+        if has_real_document and active_doc_id not in ("doc_unknown", "doc_general"):
+            try:
+                doc = self.rag_service.document_service.get_document(active_doc_id, user_id=user_id)
+                active_company_name = getattr(doc, "companyName", "") if doc else ""
+            except Exception:
+                active_company_name = ""
+
         intent, should_web_search = self._classify_intent(
             question=question,
             has_active_doc=has_real_document,
             history=history_to_supply,
             search_mode=effective_mode,
+            active_company_name=active_company_name,
         )
         logger.info(f"FinSight AI Router -> Q: '{question}' | Intent: '{intent}' | Search Mode: '{effective_mode}' | Do Search: {should_web_search}")
 
         # 5. Route Execution Based on Intent
+
+        # Case 0: EXPLICIT @websearch / Web-Only Mode
+        # Works exclusively on AI + Live Web Search. Local document RAG (ChromaDB) is completely bypassed.
+        is_web_only = (
+            effective_mode == "web_only"
+            or bool(re.search(r"(?i)@websearch\b|@web\b", question))
+        )
+        if is_web_only:
+            clean_q = re.sub(r"(?i)@websearch\b|@web\b", "", question).strip()
+            if not clean_q:
+                clean_q = question.strip()
+
+            logger.info(f"FinSight AI: Executing Pure AI + Web Search (@websearch mode) for query: '{clean_q}'. Local RAG bypassed.")
+
+            # Identify target company or ticker from query
+            resolved_ticker = self.web_search_service.resolve_ticker(clean_q)
+            company_name = self.web_search_service.extract_company_from_text(clean_q)
+            if not company_name and resolved_ticker:
+                from .web_search_service import POPULAR_TICKER_MAP
+                for k, sym in POPULAR_TICKER_MAP.items():
+                    if sym == resolved_ticker and k in clean_q.lower():
+                        company_name = k.title()
+                        break
+                if not company_name:
+                    company_name = resolved_ticker.split(".")[0]
+
+            web_context = self.web_search_service.format_web_intelligence_context(
+                company_name=company_name or clean_q,
+                query=clean_q,
+                ticker=resolved_ticker,
+            )
+            web_sources = self.web_search_service.search_company_web(company_name or clean_q, clean_q, max_results=4)
+            market_data = self.web_search_service.get_company_stock_quote(company_name or clean_q, resolved_ticker)
+
+            if not web_context and not market_data:
+                fallback_msg = (
+                    f"I conducted a live web search for '{clean_q}', but was unable to find verified recent financial news or quotes. "
+                    "Please check the company name or topic and try again."
+                )
+                return self._finalize_response(active_conv_id, user_id, fallback_msg, [])
+
+            prompt = (
+                f"Live External Web Intelligence Evidence:\n{web_context}\n\n"
+                f"User Question:\n{clean_q}\n\n"
+                f"CRITICAL INSTRUCTIONS (AI + WEB SEARCH ONLY — LOCAL RAG BYPASSED):\n"
+                f"1. You are running in dedicated @websearch mode. Provide a direct, factual, and comprehensive answer based EXCLUSIVELY on the live web intelligence and market data above.\n"
+                f"2. Incorporate clickable Markdown links formatted as [Publisher or Title](URL) within your answer.\n"
+                f"3. Conclude with a dedicated section:\n"
+                f"   ### 🌐 Verified External Sources & Links\n"
+                f"   List each source link as a bullet point with its title/publisher and direct URL so the user can cross-check and independently verify the facts without blindly trusting generated figures.\n"
+                f"4. If stock quote information is available, mention the current price, day's percentage change, and quote timestamp in clear language.\n"
+                f"5. Do NOT include local PDF document citations or page numbers; this query is served exclusively via live web search."
+            )
+            ai_answer = self.rag_service.llm_client.generate_response(
+                prompt=prompt,
+                system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
+                conversation_history=history_to_supply,
+                temperature=0.1,
+                max_tokens=1000
+            )
+            return self._finalize_response(
+                active_conv_id, user_id, clean_user_facing_response(ai_answer), [],
+                web_sources=web_sources,
+                market_data=market_data
+            )
 
         # Case 1: GENERAL_CONVERSATION (Greetings, Identity, Capabilities, EBITDA/Ratio definitions)
         if intent == IntentType.GENERAL_CONVERSATION:
@@ -216,9 +293,9 @@ class ChatService:
                 return self._finalize_response(active_conv_id, user_id, no_search_msg, [])
 
             # Prioritize company/ticker mentioned in the user question over the uploaded document
+            company_name = self.web_search_service.extract_company_from_text(question)
             resolved_ticker = self.web_search_service.resolve_ticker(question)
-            company_name = ""
-            if resolved_ticker:
+            if not company_name and resolved_ticker:
                 from .web_search_service import POPULAR_TICKER_MAP
                 for k, sym in POPULAR_TICKER_MAP.items():
                     if sym == resolved_ticker and k in question.lower():
@@ -227,11 +304,13 @@ class ChatService:
                 if not company_name:
                     company_name = resolved_ticker.split(".")[0]
 
-            # Fallback to active document's company if question does not mention an external company
-            if not company_name and has_real_document:
-                doc = self.rag_service.document_service.get_document(active_doc_id, user_id=user_id)
-                company_name = getattr(doc, "companyName", "") if doc else ""
-                resolved_ticker = self.web_search_service.resolve_ticker(company_name)
+            # Fallback to active document's company only if question does not mention an external topic or IPO
+            has_external_topic = bool(re.search(r"\b(?:ipo|initial public offering|lot|gmp|grey market|allotment|price band|issue price|share price|stock price|competitor|peer)\b", question, re.IGNORECASE))
+            active_mentioned = bool(active_company_name and any(part.lower() in question.lower() for part in active_company_name.split() if len(part) > 3))
+            if not company_name and has_real_document and (active_mentioned or not has_external_topic):
+                company_name = active_company_name
+                if not resolved_ticker:
+                    resolved_ticker = self.web_search_service.resolve_ticker(company_name)
 
             web_context = self.web_search_service.format_web_intelligence_context(
                 company_name=company_name or question,
@@ -248,13 +327,23 @@ class ChatService:
                 )
                 return self._finalize_response(active_conv_id, user_id, fallback_msg, [])
 
-            prompt = f"Live Market Evidence:\n{web_context}\n\nUser Question:\n{question}\n\nProvide a direct, concise, and professional answer stating the current price, performance, and quote timestamp in clear language."
+            prompt = (
+                f"Live Market & External Web Intelligence Evidence:\n{web_context}\n\n"
+                f"User Question:\n{question}\n\n"
+                f"CRITICAL INSTRUCTIONS:\n"
+                f"1. Answer the question directly, accurately, and professionally based on the evidence above.\n"
+                f"2. Incorporate clickable Markdown links formatted as [Publisher or Title](URL) within your answer.\n"
+                f"3. In addition, conclude with a dedicated section:\n"
+                f"   ### 🌐 Verified External Sources & Links\n"
+                f"   List each source link as a bullet point with its title/publisher and URL so the user can cross-check and independently verify the facts without blindly trusting generated figures.\n"
+                f"4. If stock quote information is available, state the current price, day's percentage change, and quote timestamp in clear language."
+            )
             ai_answer = self.rag_service.llm_client.generate_response(
                 prompt=prompt,
                 system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
                 conversation_history=history_to_supply,
                 temperature=0.1,
-                max_tokens=800
+                max_tokens=900
             )
             return self._finalize_response(
                 active_conv_id, user_id, clean_user_facing_response(ai_answer), [],
@@ -386,16 +475,42 @@ class ChatService:
         elif conversation_history:
             history_to_supply = conversation_history
 
+        active_company_name = ""
+        if has_real_document and active_doc_id not in ("doc_unknown", "doc_general"):
+            try:
+                doc = self.rag_service.document_service.get_document(active_doc_id, user_id=user_id)
+                active_company_name = getattr(doc, "companyName", "") if doc else ""
+            except Exception:
+                active_company_name = ""
+
         intent, should_web_search = self._classify_intent(
             question=question,
             has_active_doc=has_real_document,
             history=history_to_supply,
             search_mode=effective_mode,
+            active_company_name=active_company_name,
         )
 
-        # For conversational turns, out-of-scope, real-time market queries, or questions without an uploaded document:
+        is_web_only = (
+            effective_mode == "web_only"
+            or bool(re.search(r"(?i)@websearch\b|@web\b", question))
+        )
+
+        # Check if query targets an external company or external market/IPO topic
+        query_company = self.web_search_service.extract_company_from_text(question)
+        is_external_company = bool(
+            query_company and active_company_name and query_company.lower() not in active_company_name.lower()
+        )
+        has_external_topic = bool(
+            re.search(r"\b(?:ipo|initial public offering|lot|gmp|grey market|allotment|price band|issue price|stock price|share price)\b", question, re.IGNORECASE)
+        )
+
+        # For @websearch mode, external inquiries, conversational turns, out-of-scope, real-time market queries, or questions without an uploaded document:
         if (
-            intent in (IntentType.GENERAL_CONVERSATION, IntentType.OUT_OF_SCOPE, IntentType.REALTIME_CURRENT)
+            is_web_only
+            or is_external_company
+            or has_external_topic
+            or intent in (IntentType.GENERAL_CONVERSATION, IntentType.OUT_OF_SCOPE, IntentType.REALTIME_CURRENT)
             or (not has_real_document and intent == IntentType.DOCUMENT_QUESTION)
         ):
             resp = self.process_query(

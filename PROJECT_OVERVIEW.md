@@ -31,7 +31,8 @@ By combining **Retrieval-Augmented Generation (RAG)** with **ChromaDB dense vect
 3. **Strict Document-Scoped Hybrid Retrieval**: ChromaDB HNSW vector search is strictly constrained to `document_id`. Cross-document semantic bleeding is 100% eliminated.
 4. **Deterministic Vector Cache Fingerprinting (`v2.2.0`)**: Computes `cache_fingerprint = f"{doc_hash}_{EMBEDDING_MODEL}_{INDEX_PIPELINE_VERSION}"`. Verified existing filings load in **< 1 second (0 ms indexing)**.
 5. **Selective Page-Level OCR**: PyMuPDF extracts digital text at C-speed; Google Gemini 2.0 Flash Vision is activated **strictly on image-only pages** (< 20 native text characters).
-6. **Idempotent Background Worker Pool**: Asynchronous thread pool prevents concurrent worker collisions on the same document and provides a dedicated retry endpoint (`POST /{document_id}/retry`).
+6. **Automated Live Web Discovery & Verifiable Citation Links**: Automatically detects inquiries regarding external companies, competitor comparisons, or unindexed topics. Executes DuckDuckGo web search and Yahoo Finance market queries, appending valid clickable links with tracking redirects stripped and a dedicated cross-checking section so users can independently verify figures.
+7. **Idempotent Background Worker Pool**: Asynchronous thread pool prevents concurrent worker collisions on the same document and provides a dedicated retry endpoint (`POST /{document_id}/retry`).
 
 ---
 
@@ -92,6 +93,12 @@ FinSight AI Chunking (PRESERVED):
 - **Side-by-Side PDF Split View**: View the original document page while conversing with the AI.
 - **SSE Streaming**: Smooth, real-time token delivery with stop-generation support.
 - **Rich Markdown Formatting**: Alternating financial table rows, bold KPI badges, and clickable page citations.
+
+### 5. Automated External Web Search & Verifiable Source Links
+- **Autonomous Multi-Entity Routing**: Detects mentions of peer companies, upcoming IPOs (e.g. Jio IPO lot price, price band, GMP), competitors, and industry trends distinct from the active document, triggering live web searches by default in "auto" mode. If the question pertains to an external entity, local document chunks are completely excluded to eliminate false citations.
+- **Direct HTTPS Links Without Redirects**: DuckDuckGo tracking parameters (`uddg=`) are unquoted and stripped, generating direct valid destination links (`[Publisher](https://...)`).
+- **Independent Cross-Check Section**: All external answers conclude with `### 🌐 Verified External Sources & Links` so analysts can independently cross-check reported figures.
+- **Real-Time Market Quotes**: Yahoo Finance integration pulls current share prices, intraday percentage change, market capitalization, and 52-week highs/lows with 60-second TTL caching.
 
 ---
 

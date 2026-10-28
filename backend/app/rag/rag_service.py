@@ -227,37 +227,65 @@ class RAGService:
         except Exception as k_err:
             logger.warning(f"Knowledge Card notice for doc '{document_id}': {str(k_err)}")
 
-        # Retrieve Live Web & Real-Time Stock Intelligence if requested
+        # Retrieve Live Web & Real-Time Stock Intelligence if requested or if query concerns external/missing data
+        query_company = self.web_search_service.extract_company_from_text(question)
+        is_external_company = bool(
+            query_company and company_name and query_company.lower() not in company_name.lower()
+        )
+        has_ipo_or_market_topic = bool(
+            re.search(r"\b(?:ipo|initial public offering|lot|gmp|grey market|allotment|price band|issue price|stock price|share price)\b", question, re.IGNORECASE)
+        )
+
+        # Check keyword overlap between query nouns and retrieved document chunks
+        query_nouns = [
+            w.lower() for w in re.findall(r"\b[A-Za-z0-9]{3,}\b", question)
+            if w.lower() not in ("what", "when", "where", "which", "how", "much", "tell", "show", "price", "report", "company", "total", "financial", "year", "quarter")
+        ]
+        all_chunk_text = " ".join([c.get("text", "").lower() for c in unique_chunks])
+        has_zero_keyword_overlap = bool(query_nouns and sum(1 for w in query_nouns if w in all_chunk_text) == 0)
+
+        max_similarity = max([float(c.get("similarity_score", 0.0)) for c in unique_chunks], default=0.0)
+        chunks_insufficient = (len(unique_chunks) == 0 or max_similarity < 0.40)
+        should_fetch_web = (
+            use_web_search
+            or is_external_company
+            or has_ipo_or_market_topic
+            or has_zero_keyword_overlap
+            or chunks_insufficient
+        )
+
         web_text = ""
         web_sources = []
         market_data = None
-        if use_web_search:
+        if should_fetch_web:
             try:
-                target_company = company_name
-                target_ticker = ticker
-                query_ticker = self.web_search_service.resolve_ticker(question)
-                if query_ticker:
-                    target_ticker = query_ticker
-                    from ..services.web_search_service import POPULAR_TICKER_MAP
-                    for k, sym in POPULAR_TICKER_MAP.items():
-                        if sym == query_ticker and k in question.lower():
-                            target_company = k.title()
-                            break
-                    if not target_company or target_company == company_name:
-                        target_company = query_ticker.split(".")[0]
+                target_company = query_company or (company_name if not (is_external_company or has_ipo_or_market_topic) else "")
+                target_ticker = self.web_search_service.resolve_ticker(question)
+                if not target_ticker and not (is_external_company or has_ipo_or_market_topic):
+                    target_ticker = ticker
+                if not target_company or target_company.lower() in ("financial report", "corporate filing", "corporate entity"):
+                    target_company = query_company or question
 
                 web_text = self.web_search_service.format_web_intelligence_context(
                     company_name=target_company,
                     query=question,
                     ticker=target_ticker
                 )
-                web_sources = self.web_search_service.search_company_web(target_company, question, max_results=3)
+                web_sources = self.web_search_service.search_company_web(target_company, question, max_results=4)
                 market_data = self.web_search_service.get_company_stock_quote(target_company, target_ticker)
             except Exception as w_err:
                 logger.warning(f"Web intelligence pass notice: {str(w_err)}")
 
-        # Assemble Hierarchical Evidence
-        formatted_chunks = self._format_context(unique_chunks)
+        # If the query is about an external company, external IPO/market topic, or has zero keyword overlap with document:
+        is_strictly_external = (is_external_company or has_ipo_or_market_topic or has_zero_keyword_overlap) and (bool(web_text) or bool(web_sources))
+        if is_strictly_external:
+            logger.info(f"RAG Engine: Query '{question}' is external/unmatched with local PDF. Excluding local document chunks.")
+            unique_chunks = []
+            formatted_chunks = ""
+            k_card_text = ""
+        else:
+            formatted_chunks = self._format_context(unique_chunks)
+
         formatted_history = self._format_history(conversation_history)
 
         context_blocks = []
@@ -266,7 +294,19 @@ class RAGService:
         if k_card_text:
             context_blocks.append(f"--- OVERVIEW KNOWLEDGE CARD (SUMMARY) ---\n{k_card_text}")
         if web_text:
-            context_blocks.append(web_text)
+            if is_strictly_external:
+                context_blocks.append(
+                    f"--- LIVE WEB INTELLIGENCE & VERIFIED MARKET DATA ---\n{web_text}\n\n"
+                    f"CRITICAL INSTRUCTIONS FOR EXTERNAL / WEB QUERIES:\n"
+                    f"1. Answer directly and comprehensively using the live web intelligence evidence above.\n"
+                    f"2. Embed clickable Markdown links formatted as [Publisher or Title](URL) within the response text.\n"
+                    f"3. Conclude with a dedicated section:\n"
+                    f"   ### 🌐 Verified External Sources & Links\n"
+                    f"   List each source link as a bullet point with its title/publisher and URL so the user can cross-check and independently verify the facts.\n"
+                    f"4. Do NOT cite or invent page numbers from the local document since this query is fulfilled via verified external web intelligence."
+                )
+            else:
+                context_blocks.append(web_text)
 
         full_context = "\n\n".join(context_blocks)
 
@@ -351,8 +391,73 @@ class RAGService:
 
             is_fallback_or_error = any(
                 phrase in clean_answer.lower()
-                for phrase in ("could not find enough information", "couldn't find enough information", "not found in the uploaded report", "temporarily busy", "rate limit", "not explicitly disclosed")
+                for phrase in (
+                    "could not find enough information",
+                    "couldn't find enough information",
+                    "not found in the uploaded report",
+                    "temporarily busy",
+                    "rate limit",
+                    "not explicitly disclosed",
+                    "does not contain any information",
+                    "cannot be determined from the provided document",
+                    "there are no references to",
+                    "no information regarding",
+                    "does not pertain to",
+                    "not mentioned in",
+                )
             )
+
+            # Automatic Web Search Fallback if the document does not contain the required information
+            if is_fallback_or_error and not bundle["web_sources"]:
+                logger.info(f"RAG: Document lacks information for '{question}'. Falling back to live web search.")
+                fb_company = self.web_search_service.extract_company_from_text(question) or company_name
+                fb_ticker = self.web_search_service.resolve_ticker(question) or ticker
+                if not fb_company or fb_company.lower() in ("financial report", "corporate filing", "corporate entity"):
+                    fb_company = question
+
+                try:
+                    fb_web_text = self.web_search_service.format_web_intelligence_context(
+                        company_name=fb_company,
+                        query=question,
+                        ticker=fb_ticker
+                    )
+                    fb_web_sources = self.web_search_service.search_company_web(fb_company, question, max_results=3)
+                    fb_market_data = self.web_search_service.get_company_stock_quote(fb_company, fb_ticker)
+
+                    if fb_web_sources or fb_web_text:
+                        fb_prompt = (
+                            f"Live External Web Intelligence Evidence:\n{fb_web_text}\n\n"
+                            f"User Question:\n{question}\n\n"
+                            f"CRITICAL INSTRUCTIONS:\n"
+                            f"1. Note briefly that this specific information was not found in the uploaded report, but provide a direct, factual answer using the verified live web evidence above.\n"
+                            f"2. Include clickable Markdown links formatted as [Publisher or Title](URL) within your answer.\n"
+                            f"3. In addition, conclude with a dedicated section:\n"
+                            f"   ### 🌐 Verified External Sources & Links\n"
+                            f"   List each source link as a bullet point with its title/publisher and URL so the user can cross-check and independently verify the facts without blindly trusting generated figures.\n"
+                            f"4. If live market quote data is present, mention the price, day's change, and quote timestamp."
+                        )
+                        fb_answer = self.llm_client.generate(
+                            prompt=fb_prompt,
+                            system_instruction=FINSIGHT_ANALYST_SYSTEM_PROMPT,
+                            temperature=0.15,
+                            max_tokens=1200,
+                        )
+                        if fb_answer:
+                            fb_clean = fb_answer
+                            fb_clean = re.sub(r"Evidence\s*\d+\s*(?:/|—|-|:)?\s*(?:svgPage|Page)?\s*(\d+)", r"Source: Page \1", fb_clean, flags=re.IGNORECASE)
+                            fb_clean = re.sub(r"svgPage\s*(\d+)", r"Page \1", fb_clean, flags=re.IGNORECASE)
+                            fb_clean = re.sub(r"\[Evidence\s*\d+\]", "", fb_clean, flags=re.IGNORECASE)
+                            return {
+                                "answer": fb_clean,
+                                "sources": [],
+                                "pages": [],
+                                "sections": [],
+                                "retrieved_chunks": [],
+                                "web_sources": fb_web_sources,
+                                "market_data": fb_market_data,
+                            }
+                except Exception as fb_err:
+                    logger.warning(f"RAG automatic web fallback error: {str(fb_err)}")
 
             return {
                 "answer": clean_answer,

@@ -47,20 +47,29 @@ graph TD
 
 ---
 
-## 2. RAG Question Answering Flowchart
+## 2. RAG & Real-Time Intelligence Question Answering Flowchart
 
 ```mermaid
 graph TD
     Analyst["💬 Analyst Asks Question"] -->|POST /api/v1/chat/stream| ChatRoute["API Route /chat/stream"]
-    ChatRoute -->|Resolve document_id & user_id| RAGService["RAG Service"]
+    ChatRoute -->|Extract Question & Active Doc Context| IntentRouter["🧠 Intent Router & Multi-Entity Classifier"]
     
-    RAGService -->|Query Similarity| VectorService["ChromaDB Vector Store"]
-    VectorService -->|Strict Filter: document_id (Zero Bleed)| ChromaDB["🗄️ ChromaDB Collection"]
-    ChromaDB -->|Return Top-15 Candidate Chunks| VectorService
+    IntentRouter --> Decision{"Query Target?"}
     
-    VectorService -->|Apply Keyword BM25 & Table Priority Boost| RAGService
-    RAGService -->|Format Context: Primary Document Evidence First| PromptBuilder["Context Assembly"]
-    PromptBuilder -->|Inject Evidence + System Persona| GroqLLM["🤖 Groq LLM (Llama 3.3 70B Versatile)"]
+    Decision -- "External Company / Competitor / Market Trend" --> WebSearchEngine["🌐 Web Search & Quote Engine"]
+    WebSearchEngine --> LiveDDG["DuckDuckGo (News & Web API)"]
+    WebSearchEngine --> LiveYF["Yahoo Finance (Quotes & Valuation)"]
+    LiveDDG & LiveYF --> FormatWeb["Format Evidence + Direct Links (uddg= stripped)"]
+    FormatWeb --> PromptBuilder["Context Assembly"]
+    
+    Decision -- "Document Specific Question" --> VectorSearch["ChromaDB Scoped Vector Search"]
+    VectorSearch -->|Filter: document_id (Zero Bleed)| ChromaDB["🗄️ ChromaDB Collection"]
+    ChromaDB -->|Top Chunks + BM25 Lexical Re-rank| RAGService["RAG Service"]
+    RAGService --> SufficientCheck{"Chunks Sufficient & Relevant?"}
+    SufficientCheck -- YES --> PromptBuilder
+    SufficientCheck -- NO (Missing from Doc) --> WebSearchEngine
+    
+    PromptBuilder -->|Inject Evidence + Strict Citation Instructions| GroqLLM["🤖 Groq LLM (Llama 3.3 70B Versatile)"]
     
     loop Server-Sent Events (SSE)
         GroqLLM -->|Stream Token Delta| ChatRoute
@@ -68,7 +77,7 @@ graph TD
     end
     
     GroqLLM -->|Stream Complete| ChatRoute
-    ChatRoute -->|SSE Event: [DONE] with Citations| Frontend
+    ChatRoute -->|Emit: Citations + Web Sources + [DONE]| Frontend
     ChatRoute -->|Persist Thread & Message| Storage["🔥 Firestore / Local Storage"]
 ```
 
@@ -116,6 +125,14 @@ graph TD
   - If native character count $\ge 20$: Extracts text via **PyMuPDF** at C-speed.
   - If native character count $< 20$ and images are detected: Activates **Google Gemini 2.0 Flash Vision** exclusively on that page.
   - Pages exceeding the OCR budget are flagged in `unprocessed_ocr_pages` metadata rather than silently discarded.
+
+### F. Automated Real-Time Web Intelligence & Verifiable Citation Routing
+- **Problem**: When a user asks about another company (e.g. asking about HDFC Bank or TCS while viewing an SBI report) or asks for data not in the uploaded report, traditional RAG systems fail with hallucinated answers or dead-end "information not found" errors.
+- **Solution**:
+  1. **Multi-Entity Intent Router**: Resolves target companies and external queries (`active_company_name` vs query entities).
+  2. **Automated Live Web & Quote Retrieval**: Fetches DuckDuckGo news/text search and Yahoo Finance real-time market quotes with 60-second caching.
+  3. **Direct, Valid HTTPS Links**: All tracking redirects (`uddg=`) are unquoted and stripped, producing direct destination links.
+  4. **Transparent Cross-Checking**: The LLM prompt enforces the generation of inline Markdown links `[Publisher](URL)` and a concluding `### 🌐 Verified External Sources & Links` section allowing users to independently verify data.
 
 ---
 

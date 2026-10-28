@@ -47,8 +47,10 @@ class ChatRequest(BaseModel):
     @property
     def target_search_mode(self) -> str:
         explicit_mode = self.search_mode or self.searchMode
-        if explicit_mode and str(explicit_mode).strip().lower() in ("auto", "on", "off"):
-            return str(explicit_mode).strip().lower()
+        if explicit_mode and str(explicit_mode).strip().lower() in ("auto", "on", "off", "web_only", "@websearch"):
+            _val = str(explicit_mode).strip().lower()
+            return "web_only" if _val in ("web_only", "@websearch") else _val
+
         if self.use_web_search is True or self.useWebSearch is True:
             return "on"
         if self.use_web_search is False or self.useWebSearch is False:
@@ -57,7 +59,7 @@ class ChatRequest(BaseModel):
 
     @property
     def target_web_search(self) -> bool:
-        return self.target_search_mode == "on"
+        return self.target_search_mode in ("on", "web_only")
 
 
 class ChatQueryRequest(ChatRequest):

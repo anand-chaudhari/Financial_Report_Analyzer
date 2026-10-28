@@ -84,10 +84,32 @@ class IntentRouter:
             r"\b(?:translate to french|translate to spanish|write a python script to scrape)\b",
         ]
 
+        # 6. External market, IPOs, competitors, peers, and current news indicators
+        self._external_indicators = [
+            # Primary market, IPOs, and offerings
+            r"\b(?:ipo|initial public offering|fpo|ofs|offer for sale)\b",
+            r"\b(?:lot price|lot size|\d+\s*lots?|price band|issue price|cut-off price)\b",
+            r"\b(?:gmp|grey market|grey market premium|listing date|allotment|allotment status|subscription status|oversubscribed)\b",
+            r"\b(?:drhp|rhp|draft red herring|red herring prospectus)\b",
+            # Live prices & quotes in currencies
+            r"\b(?:price of\s+[a-z0-9\s&]+\s+(?:in inr|in usd|today|now))\b",
+            r"\b(?:stock price|share price|market price|trading at|current price|52\s*week\s*(?:high|low))\b",
+            # Competitors, peers, and industry analysis
+            r"\b(?:competitors?|peers?|rivals?|industry benchmark)\b",
+            r"\b(?:market share|industry rank|market position)\b",
+            r"\b(?:latest news|recent news|breaking news|in the news|recent developments?)\b",
+            r"\b(?:analyst ratings?|consensus|price target|buy or sell|downgrade|upgrade)\b",
+            r"\b(?:credit rating|moody'?s|s&p|fitch|crisil|icra)\b",
+            r"\b(?:lawsuit|investigation|regulatory penalty|sebi|sec probe)\b",
+            r"\b(?:latest|recent|upcoming)\s+(?:events?|announcements?|launches?|acquisitions?)\b",
+            r"\b(?:compare|comparison|versus|vs\.?)\s+(?:with|to|against)?\b",
+        ]
+
     def classify(
         self,
         question: str,
         has_active_doc: bool = False,
+        active_company_name: Optional[str] = None,
         history: Optional[List[Dict[str, Any]]] = None,
         search_mode: str = "auto",
     ) -> Tuple[str, bool]:
@@ -101,6 +123,11 @@ class IntentRouter:
         """
         q_clean = question.strip().lower()
         mode = (search_mode or "auto").strip().lower()
+
+        # Step 0: Explicit @websearch command or web_only mode (Bypasses Local RAG)
+        if "@websearch" in q_clean or "@web" in q_clean or mode in ("web_only", "@websearch"):
+            logger.info("IntentRouter: Explicit @websearch / web_only mode triggered -> Bypassing Local RAG for Live Web Search")
+            return IntentType.REALTIME_CURRENT, True
 
         # Step 1: Out of scope check
         for pat in self._out_of_scope_triggers:
@@ -116,7 +143,40 @@ class IntentRouter:
             if g in q_clean and len(q_clean) < len(g) + 15:
                 return IntentType.GENERAL_CONVERSATION, False
 
-        # Step 3: General financial theory/concept (without report context)
+        # Step 3: Check if question refers to another company (different from active document)
+        from .web_search_service import get_web_search_service
+        web_search = get_web_search_service()
+        mentioned_company = web_search.extract_company_from_text(question)
+
+        is_different_company = False
+        if mentioned_company:
+            if not active_company_name:
+                is_different_company = True
+            else:
+                m_clean = mentioned_company.lower().strip()
+                a_clean = active_company_name.lower().strip()
+                # If mentioned company is distinct from the active report's company
+                if m_clean not in a_clean and a_clean not in m_clean:
+                    is_different_company = True
+
+        if is_different_company:
+            should_search = (mode != "off")
+            logger.info(f"IntentRouter: Detected inquiry about external company '{mentioned_company}' (Active: '{active_company_name}') -> Web search: {should_search}")
+            return IntentType.REALTIME_CURRENT, should_search
+
+        # Step 4: External market, competitors, or latest news indicators
+        is_external = False
+        for pat in self._external_indicators:
+            if re.search(pat, q_clean):
+                is_external = True
+                break
+
+        if is_external:
+            should_search = (mode != "off")
+            logger.info(f"IntentRouter: Detected external/IPO/market inquiry -> Web search: {should_search}")
+            return IntentType.REALTIME_CURRENT, should_search
+
+        # Step 5: General financial theory/concept (without report context)
         is_concept = False
         for pat in self._concept_patterns:
             if re.search(pat, q_clean):
@@ -126,7 +186,7 @@ class IntentRouter:
         if is_concept and "this report" not in q_clean and "this company" not in q_clean and not re.search(r"\bfy\s*20\d\d\b", q_clean):
             return IntentType.GENERAL_CONVERSATION, False
 
-        # Step 4: Mixed Historical vs Current Question (Category D)
+        # Step 6: Mixed Historical vs Current Question (Category D)
         is_mixed = False
         for pat in self._mixed_indicators:
             if re.search(pat, q_clean):
@@ -137,7 +197,7 @@ class IntentRouter:
             should_search = (mode != "off")
             return IntentType.MIXED_FINANCIAL, should_search
 
-        # Step 5: Real-time / Current Market Questions (Category C)
+        # Step 7: Real-time / Current Market Questions (Category C)
         is_realtime = False
         for pat in self._realtime_indicators:
             if re.search(pat, q_clean):
@@ -155,15 +215,20 @@ class IntentRouter:
             should_search = (mode != "off")
             return IntentType.REALTIME_CURRENT, should_search
 
-        # Step 6: Mode override if user explicitly set toggle to "on"
+        # Step 8: Mode override if user explicitly set toggle to "on"
         if mode == "on":
-            return IntentType.DOCUMENT_QUESTION, True
+            if is_different_company or is_external or is_realtime or not has_active_doc:
+                return IntentType.REALTIME_CURRENT, True
+            return IntentType.MIXED_FINANCIAL if has_active_doc else IntentType.REALTIME_CURRENT, True
 
-        # Step 7: Document Question vs General Conversation (Category B vs Category A)
+        # Step 9: Inquiries when no document is active
         if not has_active_doc:
+            if mentioned_company or any(term in q_clean for term in ["revenue", "profit", "ebitda", "margin", "sales", "growth", "dividend", "earnings", "valuation"]):
+                should_search = (mode != "off")
+                return IntentType.REALTIME_CURRENT, should_search
             return IntentType.GENERAL_CONVERSATION, False
 
-        # In auto or off mode, default document questions do NOT trigger web search
+        # Step 10: In auto or off mode, default document questions do not trigger web search
         return IntentType.DOCUMENT_QUESTION, False
 
 

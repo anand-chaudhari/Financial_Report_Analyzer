@@ -21,8 +21,8 @@ export interface DirectChatRequest {
   conversation_history?: Array<{ sender?: string; role?: string; text?: string; content?: string }>;
   use_web_search?: boolean;
   useWebSearch?: boolean;
-  search_mode?: 'auto' | 'on' | 'off';
-  searchMode?: 'auto' | 'on' | 'off';
+  search_mode?: 'auto' | 'on' | 'off' | 'web_only';
+  searchMode?: 'auto' | 'on' | 'off' | 'web_only';
 }
 
 export interface DirectChatResponse {

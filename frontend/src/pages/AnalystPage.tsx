@@ -75,7 +75,7 @@ export const AnalystPage: React.FC = () => {
   const [isPdfSplitOpen, setIsPdfSplitOpen] = useState<boolean>(false);
   const [splitHighlightSource, setSplitHighlightSource] = useState<SourceMetadata | null>(null);
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
-  const [searchMode, setSearchMode] = useState<'auto' | 'on' | 'off'>('auto');
+  const [searchMode, setSearchMode] = useState<'auto' | 'on' | 'off' | 'web_only'>('auto');
 
   // Sidebar Layout State
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
@@ -286,14 +286,19 @@ export const AnalystPage: React.FC = () => {
 
       const fileName = activeReport?.fileName || activeReport?.filename || 'Financial_Report.pdf';
 
+      const isExplicitWebOnly =
+        searchMode === 'web_only' ||
+        Boolean(userPrompt.toLowerCase().includes('@websearch') || userPrompt.toLowerCase().includes('@web'));
+      const effectiveSearchMode: 'auto' | 'on' | 'off' | 'web_only' = isExplicitWebOnly ? 'web_only' : searchMode;
+
       const resData = await chatService.streamChat(
         {
           conversation_id: activeConversationId || undefined,
           document_id: selectedReportId || activeReport?.id || activeReport?.documentId || 'doc_unknown',
           question: userPrompt,
           conversation_history: historyForBackend,
-          search_mode: searchMode,
-          use_web_search: searchMode === 'on',
+          search_mode: effectiveSearchMode,
+          use_web_search: effectiveSearchMode === 'on' || effectiveSearchMode === 'web_only',
         },
         (_token, accumulated) => {
           setMessages((prev) =>
@@ -472,7 +477,11 @@ export const AnalystPage: React.FC = () => {
   };
 
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setQueryText(e.target.value);
+    const val = e.target.value;
+    setQueryText(val);
+    if ((val.toLowerCase().includes('@websearch') || val.toLowerCase().includes('@web')) && searchMode !== 'web_only') {
+      setSearchMode('web_only');
+    }
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   };
@@ -947,14 +956,73 @@ export const AnalystPage: React.FC = () => {
                   >
                     <span>🔒 Off</span>
                   </button>
+
+                  {/* WEB SEARCH ONLY Mode (@websearch) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchMode('web_only');
+                      if (!queryText.toLowerCase().includes('@websearch')) {
+                        setQueryText((prev) => `@websearch ${prev.replace(/@websearch\s*/gi, '').trim()}`.trimStart());
+                      }
+                      if (textareaRef.current) textareaRef.current.focus();
+                    }}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                      searchMode === 'web_only'
+                        ? 'bg-purple-600 text-white shadow-xs shadow-purple-500/25 ring-1 ring-purple-500'
+                        : 'text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:bg-purple-500/10'
+                    }`}
+                    title="@websearch Mode: Bypasses local PDF RAG and answers exclusively using live AI + Web Search."
+                  >
+                    <span>🚀 @websearch</span>
+                  </button>
                 </div>
 
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 hidden md:inline font-medium">
-                  {searchMode === 'auto' && '⚡ Auto: Automatically detects market quotes & live financial news'}
-                  {searchMode === 'on' && '🌐 On: External web search enabled for this turn'}
-                  {searchMode === 'off' && '🔒 Off: Document-only mode; web discovery disabled'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 hidden lg:inline font-medium">
+                    {searchMode === 'auto' && '⚡ Auto: Automatically detects market quotes & live financial news'}
+                    {searchMode === 'on' && '🌐 On: External web search enabled for this turn'}
+                    {searchMode === 'off' && '🔒 Off: Document-only mode; web discovery disabled'}
+                    {searchMode === 'web_only' && '🚀 @websearch: Local RAG bypassed; responses generated exclusively via live web search'}
+                  </span>
+
+                  {searchMode !== 'web_only' && !queryText.toLowerCase().includes('@websearch') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchMode('web_only');
+                        setQueryText((prev) => `@websearch ${prev}`.trimStart());
+                        if (textareaRef.current) textareaRef.current.focus();
+                      }}
+                      className="px-2 py-0.5 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800/80 text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                      title="Click to insert @websearch into prompt"
+                    >
+                      <Sparkles className="w-2.5 h-2.5" />
+                      <span>Use @websearch</span>
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {/* @websearch Active Notice Badge */}
+              {(searchMode === 'web_only' || queryText.toLowerCase().includes('@websearch')) && (
+                <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-semibold animate-fade-in">
+                  <div className="flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 animate-pulse" />
+                    <span><strong>@websearch Mode Active:</strong> Answers exclusively using live AI + Web Search (Local PDF RAG is bypassed).</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchMode('auto');
+                      setQueryText((prev) => prev.replace(/@websearch\s*/gi, '').replace(/@web\s*/gi, '').trim());
+                    }}
+                    className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline cursor-pointer font-bold"
+                  >
+                    Switch to Auto
+                  </button>
+                </div>
+              )}
 
               {/* Multiline Input & Solid Action Button */}
               <div className="flex items-end gap-2.5">
@@ -963,9 +1031,11 @@ export const AnalystPage: React.FC = () => {
                     ref={textareaRef}
                     rows={1}
                     placeholder={
-                      selectedReportId
-                        ? `Ask a financial question about ${reportTitle}...`
-                        : 'Upload or select a report to begin analysis...'
+                      searchMode === 'web_only' || queryText.toLowerCase().includes('@websearch')
+                        ? 'Web Search Mode active: Ask any company, live stock quote, or market question...'
+                        : selectedReportId
+                        ? `Ask a financial question about ${reportTitle}... (or type @websearch for web search)`
+                        : 'Upload or select a report to begin analysis... (or type @websearch to search web)'
                     }
                     value={queryText}
                     onChange={handleTextareaInput}
@@ -1003,7 +1073,7 @@ export const AnalystPage: React.FC = () => {
                 <span className="flex items-center gap-1">
                   <CornerDownLeft className="w-3 h-3" /> Press Enter to send, Shift+Enter for new line
                 </span>
-                <span className="hidden sm:inline">Grounded AI Analysis • Page-Level PDF Citations</span>
+                <span className="hidden sm:inline">Grounded AI Analysis • Page Citations • Type @websearch for Web-Only Search</span>
               </div>
             </div>
           </div>

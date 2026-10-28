@@ -106,6 +106,24 @@ The backend uses `serviceAccountKey.json` to verify user logins.
 
 ---
 
+## 🌐 Testing Automated External Web Search & Verified Citation Links
+
+1. Go to the **AI Analyst** page.
+2. With an active document open (e.g. SBI annual report), ask a question about a peer company:
+   - *"What was HDFC Bank's net profit in 2024?"*
+   - *"How does this company compare with TCS?"*
+   - *"What is Apple's current stock price and performance today?"*
+3. **Notice what happens**:
+   - In default **Auto** mode, FinSight AI automatically detects that the question is about an external entity or not in the document.
+   - It executes a live web discovery pass and retrieves real-time Yahoo Finance quotes.
+   - The generated response includes **clickable Markdown links** (`[Publisher](URL)`) and a dedicated **`### 🌐 Verified External Sources & Links`** section so you can cross-check figures independently without blindly trusting AI outputs.
+
+4. **Try `@websearch` Mode directly**:
+   - Click the **`🚀 @websearch`** button in the search mode bar, or type **`@websearch What is Microsoft's current market cap?`** in the chat input.
+   - Local document RAG is completely bypassed; the answer is synthesized **exclusively from live AI + Web Search** with zero PDF page citations.
+
+---
+
 ## ❓ Frequently Asked Questions
 
 ### 1. Do I need to run `pip install` or `npm install` every time?

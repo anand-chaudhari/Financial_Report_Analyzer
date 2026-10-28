@@ -6,8 +6,9 @@ Enforces grounded facts, non-hallucinatory citations, TTL-bounded caching, and s
 import os
 import re
 import time
+import urllib.parse
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from ..utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -30,25 +31,88 @@ POPULAR_TICKER_MAP = {
     "reliance industries": "RELIANCE.NS",
     "reliance": "RELIANCE.NS",
     "ril": "RELIANCE.NS",
+    "jio": "RELIANCE.NS",
+    "reliance jio": "RELIANCE.NS",
+    "jio platforms": "RELIANCE.NS",
+    "jio financial": "JIOFIN.NS",
+    "jio financial services": "JIOFIN.NS",
+    "jiofin": "JIOFIN.NS",
+    "zomato": "ZOMATO.NS",
+    "swiggy": "SWIGGY.NS",
+    "paytm": "PAYTM.NS",
+    "one97": "PAYTM.NS",
+    "ola": "OLAELEC.NS",
+    "ola electric": "OLAELEC.NS",
+    "nykaa": "NYKAA.NS",
+    "lic": "LICI.NS",
+    "life insurance corporation": "LICI.NS",
+    "irfc": "IRFC.NS",
+    "irctc": "IRCTC.NS",
+    "rvnl": "RVNL.NS",
+    "ireda": "IREDA.NS",
+    "hal": "HAL.NS",
+    "bel": "BEL.NS",
+    "bhel": "BHEL.NS",
+    "bpcl": "BPCL.NS",
+    "ioc": "IOC.NS",
+    "hpcl": "HPCL.NS",
+    "gail": "GAIL.NS",
+    "sail": "SAIL.NS",
+    "vedanta": "VEDL.NS",
+    "hindalco": "HINDALCO.NS",
+    "indigo": "INDIGO.NS",
+    "interglobe aviation": "INDIGO.NS",
+    "hyundai": "HYUNDAI.NS",
+    "hyundai motor": "HYUNDAI.NS",
+    "dlf": "DLF.NS",
+    "dmart": "DMART.NS",
+    "varun beverages": "VBL.NS",
+    "vbl": "VBL.NS",
+    "suzlon": "SUZLON.NS",
     "hdfc bank": "HDFCBANK.NS",
+    "hdfc": "HDFCBANK.NS",
     "icici bank": "ICICIBANK.NS",
+    "icici": "ICICIBANK.NS",
+    "axis bank": "AXISBANK.NS",
+    "kotak mahindra bank": "KOTAKBANK.NS",
+    "kotak bank": "KOTAKBANK.NS",
     "wipro": "WIPRO.NS",
     "state bank of india": "SBIN.NS",
     "sbi": "SBIN.NS",
+    "punjab national bank": "PNB.NS",
+    "pnb": "PNB.NS",
+    "bank of baroda": "BANKBARODA.NS",
     "bharti airtel": "BHARTIARTL.NS",
+    "airtel": "BHARTIARTL.NS",
     "itc": "ITC.NS",
     "itc limited": "ITC.NS",
+    "hindustan unilever": "HINDUNILVR.NS",
+    "hul": "HINDUNILVR.NS",
     "larsen & toubro": "LT.NS",
     "l&t": "LT.NS",
     "tata motors": "TATAMOTORS.NS",
+    "tata steel": "TATASTEEL.NS",
     "maruti suzuki": "MARUTI.NS",
+    "maruti": "MARUTI.NS",
+    "mahindra & mahindra": "M&M.NS",
+    "m&m": "M&M.NS",
     "hcl technologies": "HCLTECH.NS",
     "hcl tech": "HCLTECH.NS",
+    "tech mahindra": "TECHM.NS",
     "bajaj finance": "BAJFINANCE.NS",
+    "bajaj finserv": "BAJAJFINSV.NS",
     "sun pharmaceutical": "SUNPHARMA.NS",
+    "sun pharma": "SUNPHARMA.NS",
     "titan company": "TITAN.NS",
+    "titan": "TITAN.NS",
     "adani enterprises": "ADANIENT.NS",
     "adani ports": "ADANIPORTS.NS",
+    "adani green": "ADANIGREEN.NS",
+    "ntpc": "NTPC.NS",
+    "ongc": "ONGC.NS",
+    "coal india": "COALINDIA.NS",
+    "asian paints": "ASIANPAINT.NS",
+    "ultratech cement": "ULTRACEMCO.NS",
     # Global Equities (US Exchanges)
     "apple": "AAPL",
     "microsoft": "MSFT",
@@ -59,7 +123,23 @@ POPULAR_TICKER_MAP = {
     "tesla": "TSLA",
     "meta": "META",
     "meta platforms": "META",
+    "facebook": "META",
+    "netflix": "NFLX",
     "berkshire hathaway": "BRK-B",
+    "jpmorgan chase": "JPM",
+    "jpmorgan": "JPM",
+    "goldman sachs": "GS",
+    "morgan stanley": "MS",
+    "bank of america": "BAC",
+    "intel": "INTC",
+    "amd": "AMD",
+    "qualcomm": "QCOM",
+    "tsmc": "TSM",
+    "visa": "V",
+    "mastercard": "MA",
+    "walmart": "WMT",
+    "coca-cola": "KO",
+    "pepsico": "PEP",
 }
 
 
@@ -106,6 +186,44 @@ class WebSearchService:
 
         return None
 
+    def extract_company_from_text(self, text: str) -> Optional[str]:
+        """Extracts known company name, ticker, or financial entity from query text."""
+        if not text:
+            return None
+        text_lower = f" {text.lower()} "
+
+        # 1. Check direct benchmark mapping (longest names first)
+        for name in sorted(POPULAR_TICKER_MAP.keys(), key=len, reverse=True):
+            if f" {name} " in text_lower or f" {name}'s " in text_lower or f"({name})" in text_lower:
+                return name.title()
+
+        # 2. Check for IPO patterns: "price of <Company> IPO", "<Company> IPO"
+        ipo_m = re.search(r"(?:price of\s+)?([A-Za-z0-9\s&]{2,30}?)\s+(?:ipo|initial public offering)\b", text, re.IGNORECASE)
+        if ipo_m:
+            cand = ipo_m.group(1).strip()
+            cand = re.sub(r"^(?:the|a|an|current|latest|recent|price of|about|for)\s+", "", cand, flags=re.IGNORECASE).strip()
+            if cand and cand.lower() not in ("what is", "tell me", "details of", "share", "stock"):
+                return cand.title()
+
+        # 3. Check for isolated uppercase tokens (e.g. "JIO", "HAL", "MRF")
+        stop_acronyms = {
+            "IPO", "FPO", "OFS", "INR", "USD", "EUR", "GBP", "FY22", "FY23", "FY24", "FY25", "FY26",
+            "P&L", "EPS", "ROE", "ROCE", "EBITDA", "EBIT", "PAT", "PBT", "CAGR", "PE",
+            "PB", "NAV", "GDP", "CPI", "WPI", "RBI", "SEBI", "SEC", "CEO", "CFO", "AI",
+            "API", "PDF", "CSV", "DOCX", "RAG", "LLM", "GMP", "RHP", "DRHP", "THE", "FOR",
+            "AND", "WHAT", "HOW", "WHY", "PRICE", "LOT", "SIZE", "DATE", "BAND"
+        }
+        for token in re.findall(r"\b[A-Za-z0-9]{2,12}\b", text):
+            if token.isupper() and token not in stop_acronyms:
+                return token.title()
+
+        # 4. Regex check for formal company entities (e.g. Acme Corp, XYZ Ltd)
+        m = re.search(r"\b([A-Z][A-Za-z0-9\s,&.-]+(?:Limited|Ltd|Corporation|Corp|Inc|LLC|Bank|Motors|Technologies|Industries|Platforms|Enterprises|Power|Finance))\b", text)
+        if m:
+            return m.group(1).strip()
+
+        return None
+
     def search_company_web(
         self,
         company_name: str,
@@ -114,24 +232,32 @@ class WebSearchService:
     ) -> List[Dict[str, str]]:
         """
         Executes live web search using DuckDuckGo with bounded timeout, deduplication, and quality filtering.
-        Returns verified list of dictionaries: [{'title': ..., 'snippet': ..., 'url': ...}].
+        Returns verified list of dictionaries: [{'title': ..., 'snippet': ..., 'url': ..., 'publisher': ...}].
         """
         # Formulate clean search query
         company_clean = (company_name or "").strip()
         if company_clean.lower() in ("financial report", "financial entity", "corporate filing", "metadata", "knowledge card"):
             company_clean = ""
 
+        # Check if query mentions an explicit company (e.g. "What is HDFC Bank's profit?", "Compare with TCS")
+        query_company = self.extract_company_from_text(query)
+        if query_company:
+            effective_company = query_company
+        elif company_clean and len(company_clean.split()) <= 5:
+            effective_company = company_clean
+        else:
+            effective_company = ""
+
         clean_query = query.strip()
         # Remove noisy chat prefixes and conversational filler
         clean_query = re.sub(r"^(?:what is|what are|tell me about|how much is|can you tell me|search the web for|show me)\s+", "", clean_query, flags=re.IGNORECASE)
-        clean_query = re.sub(r"\b(?:the|a|an|current|latest|right now|today(?:'s)?|of)\b", "", clean_query, flags=re.IGNORECASE)
         clean_query = re.sub(r"[\?\.,!]", " ", clean_query)
         clean_query = re.sub(r"\s+", " ", clean_query).strip()
 
-        if company_clean and company_clean.lower() not in clean_query.lower():
-            search_terms = f"{company_clean} {clean_query}".strip()
+        if effective_company and effective_company.lower() not in clean_query.lower():
+            search_terms = f"{effective_company} {clean_query}".strip()
         else:
-            search_terms = clean_query if clean_query else company_clean
+            search_terms = clean_query if clean_query else effective_company
 
         if not search_terms:
             return []
@@ -175,15 +301,35 @@ class WebSearchService:
                     source = item.get("source", "")
                     date_str = item.get("date", "")
 
+                    # Clean DuckDuckGo redirect URLs to direct URLs
+                    if "duckduckgo.com/l/?uddg=" in href:
+                        m_uddg = re.search(r"uddg=([^&]+)", href)
+                        if m_uddg:
+                            try:
+                                href = urllib.parse.unquote(m_uddg.group(1))
+                            except Exception:
+                                pass
+
+                    if not href.startswith(("http://", "https://")):
+                        continue
+
+                    # Extract readable publisher domain
+                    publisher = ""
+                    try:
+                        p_host = urllib.parse.urlparse(href).netloc.replace("www.", "")
+                        publisher = p_host
+                    except Exception:
+                        publisher = source or "External Web"
+
                     if title and href and href not in seen_urls:
                         seen_urls.add(href)
                         res_obj = {
                             "title": title,
                             "snippet": body[:320] if len(body) > 320 else body,
                             "url": href,
+                            "publisher": publisher,
+                            "source": source or publisher,
                         }
-                        if source:
-                            res_obj["source"] = source
                         if date_str:
                             res_obj["date"] = date_str
                         results.append(res_obj)
@@ -286,8 +432,9 @@ class WebSearchService:
         lines = [
             "=== CURRENT REAL-TIME EXTERNAL MARKET INTELLIGENCE ===",
         ]
-        if company_name and company_name.lower() not in ("financial report", "financial entity", "corporate filing"):
-            lines.append(f"Entity: {company_name}")
+        extracted_name = self.extract_company_from_text(company_name) or (company_name if len(company_name.split()) <= 4 else "")
+        if extracted_name and extracted_name.lower() not in ("financial report", "financial entity", "corporate filing"):
+            lines.append(f"Entity: {extracted_name}")
 
         if quote and quote.get("price") is not None:
             curr = quote.get("currency", "")
@@ -308,13 +455,17 @@ class WebSearchService:
             lines.append(q_line)
 
         if web_items:
-            lines.append("Latest Verified Web & Financial News Coverage:")
+            lines.append("Latest Verified Web & Financial News Coverage (Use these real URLs for cross-checking):")
             for idx, item in enumerate(web_items, 1):
                 t = item.get("title", "")
                 snip = item.get("snippet", "")
                 u = item.get("url", "")
-                lines.append(f"  {idx}. \"{t}\" [Source URL: {u}]\n     {snip}")
+                pub = item.get("publisher") or item.get("source", "Web Source")
+                lines.append(f'  {idx}. Title: "{t}" | Source: [{pub}]({u})\n     URL: {u}\n     Excerpt: {snip}')
 
+        lines.append("\nGrounding & Verification Rule:")
+        lines.append("- For any information derived from external web intelligence, incorporate clickable Markdown links [Source Name](Exact_URL) into your response.")
+        lines.append("- Conclude with a '### 🌐 Verified External Sources & Links' section listing these exact URLs so the user can independently verify and cross-check the figures.")
         lines.append("=========================================================")
         return "\n".join(lines)
 
